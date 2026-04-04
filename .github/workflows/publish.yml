@@ -35,7 +35,7 @@ jobs:
           GITHUB_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         run: |
           PORTAINER_URL="https://91.98.64.92:9443"
-          STACK_ID=STACK_ID_AQUI
+          STACK_ID=48
           ENDPOINT_ID=1
 
           echo "Buscando variáveis de ambiente atuais da stack..."

@@ -9,7 +9,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file"
 ]
 
-SPREADSHEET_ID = "NOVO_SPREADSHEET_ID"
+SPREADSHEET_ID = "1iryq9TdzuQstqFPdidUN_drWLEU6C-Nf8YqeZdMPhxU"
 CREDENTIALS_PATH = os.path.join(os.getcwd(), "google_credentials.json")
 
 HEADERS = ["Data/Hora", "WhatsApp", "Nome", "Nicho", "Resumo da Conversa"]
