@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # 1. O Recebedor "Webhook" (Expõe para a internet via Traefik)
+  api:
+    image: ghcr.io/gustavocastilho-hub/mya-disparo:latest
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    environment:
+      - RABBITMQ_HOST
+      - RABBITMQ_USER
+      - RABBITMQ_PASS
+      - RABBITMQ_VHOST
+      - REDIS_URL
+      - UAZAPI_TOKEN
+      - UAZAPI_URL
+      - UAZAPI_INSTANCE
+      - LLM_API_KEY
+    networks:
+      - network_public # Rede que conecta ao Traefik e ao RabbitMQ externo
+      - default
+    restart: always
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        # Rotas HTTP e Integração
+        - "traefik.enable=true"
+        - "traefik.http.routers.mya-disparo-api.rule=Host(`webhook-whatsapp.strategicai.com.br`) && PathPrefix(`/mya-disparo`)"
+
+        # Indica ao Traefik qual porta interna o app está rodando
+        - "traefik.http.services.mya-disparo-api.loadbalancer.server.port=8000"
+
+        # Indica qual rede o Traefik deve usar para rotear o tráfego interno
+        - "traefik.docker.network=network_public"
+
+        # Configurações de HTTPS
+        - "traefik.http.routers.mya-disparo-api.entrypoints=websecure"
+        - "traefik.http.routers.mya-disparo-api.tls=true"
+        - "traefik.http.routers.mya-disparo-api.tls.certresolver=letsencryptresolver"
+
+  # 2. O Sistema Trabalhador (Sem porta aberta pra web, apenas consome a fila e processa)
+  worker:
+    image: ghcr.io/gustavocastilho-hub/mya-disparo:latest
+    command: python worker.py
+    environment:
+      - RABBITMQ_HOST
+      - RABBITMQ_USER
+      - RABBITMQ_PASS
+      - RABBITMQ_VHOST
+      - REDIS_URL
+      - UAZAPI_TOKEN
+      - UAZAPI_URL
+      - UAZAPI_INSTANCE
+      - LLM_API_KEY
+      - GOOGLE_CREDENTIALS_JSON
+    networks:
+      - network_public
+      - default
+    restart: always
+
+  # 3. O Agendador de Follow-ups (Checa a cada 30s se tem mensagens para enviar)
+  scheduler:
+    image: ghcr.io/gustavocastilho-hub/mya-disparo:latest
+    command: python scheduler.py
+    environment:
+      - REDIS_URL
+      - UAZAPI_TOKEN
+      - UAZAPI_URL
+      - UAZAPI_INSTANCE
+    networks:
+      - network_public
+      - default
+    restart: always
+    deploy:
+      mode: replicated
+      replicas: 1
+
+# Você deve usar a rede externa pelo qual o Traefik e o RabbitMQ operam.
+networks:
+  network_public:
+    external: true

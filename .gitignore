@@ -1,0 +1,16 @@
+# Configurações sensíveis e chaves
+.env
+
+# Credenciais Google Service Account (NUNCA commit!)
+*.json
+!package.json
+!package-lock.json
+
+# Arquivos temporários do Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Pastas de ambiente virtual
+venv/
+.venv/

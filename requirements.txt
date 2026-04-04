@@ -1,0 +1,20 @@
+# Motor do Bot e Agentes
+google-genai>=0.1.2
+
+# Comunicação e Utilidades
+python-dotenv
+requests
+httpx
+
+# Opcional: Para logs bonitos no terminal
+rich
+
+# Webhook (FastAPI) e Fila (RabbitMQ) e Banco de memoria (Redis)
+fastapi
+uvicorn
+pika
+redis
+
+# Integração Google Sheets (CRM de Leads)
+gspread
+google-auth
