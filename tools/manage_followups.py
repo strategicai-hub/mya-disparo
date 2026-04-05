@@ -52,10 +52,10 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
 
     # --- STEP 2: Prova social / valor (3d / 2min teste) ---
     step2_base = [
-        f"Ah {nome_ou_voce}, esqueci de comentar: semana passada a gente instalou a IA em um negócio parecido com o seu e o dono ficou impressionado com a velocidade das respostas",
-        f"{nome_ou_voce}, só pra te dar um contexto: nossos clientes estão conseguindo atender leads até de madrugada e fim de semana sem precisar de mais ninguém na equipe",
-        f"Sabia que a maioria dos negócios perde até 60% dos leads só por demora na resposta? A IA resolve isso de forma instantânea, {nome_ou_voce}",
-        f"{nome_ou_voce}, um dado que achei interessante: os clientes que testaram a IA perceberam diferença já na primeira semana. Acho que vale a pena pelo menos ver funcionando!",
+        f"Ah, esqueci de comentar: semana passada a gente instalou a IA em um negócio parecido com o seu e o dono ficou impressionado com a velocidade das respostas",
+        f"Só pra te dar um contexto: nossos clientes estão conseguindo atender leads até de madrugada e fim de semana sem precisar de mais ninguém na equipe",
+        f"Sabia que a maioria dos negócios perde até 60% dos leads só por demora na resposta? A IA resolve isso de forma instantânea",
+        f"Um dado que achei interessante: os clientes que testaram a IA perceberam diferença já na primeira semana. Acho que vale a pena pelo menos ver funcionando!",
     ]
     # Se tem nicho, adiciona variantes específicas
     if nicho:

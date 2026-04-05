@@ -104,6 +104,19 @@ async def receive_whatsapp_webhook(request: Request):
         if event_name == "messages":
             msg = payload.get("message", {})
 
+            # Mensagem de prospecção enviada pelo n8n → agenda follow-ups imediatamente
+            if msg.get("fromMe") and msg.get("track_source") == "n8n":
+                raw_chatid = msg.get("chatid", "")
+                lead_phone = raw_chatid.split("@")[0]
+                if lead_phone:
+                    try:
+                        from tools.manage_followups import schedule_followups
+                        schedule_followups(lead_phone)
+                        print(f"[FOLLOWUP] Follow-ups agendados para {lead_phone} (disparo n8n)")
+                    except Exception as e:
+                        print(f"[FOLLOWUP] Erro ao agendar follow-ups do disparo: {e}")
+                return {"status": "success", "message": "Disparo n8n registrado"}
+
             # Se foi você mesmo quem enviou pelo whats, ignora
             if not msg.get("fromMe", True):
 
