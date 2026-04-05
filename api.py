@@ -100,7 +100,6 @@ async def receive_whatsapp_webhook(request: Request):
         payload = await request.json()
 
         event_name = payload.get("EventType")
-        print(f"[WEBHOOK] EventType={event_name} | payload_keys={list(payload.keys())} | fromMe={payload.get('message', {}).get('fromMe')} | track_source={payload.get('message', {}).get('track_source')}")
 
         if event_name == "messages":
             msg = payload.get("message", {})
@@ -160,6 +159,34 @@ async def receive_whatsapp_webhook(request: Request):
     except Exception as e:
         print(f"Erro no webhook: {e}")
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
+
+@app.post("/mya-disparo/iniciar-followup")
+async def iniciar_followup(request: Request):
+    """
+    Chamado pelo n8n após enviar a mensagem de prospecção.
+    Agenda os follow-ups para o lead imediatamente.
+    Body esperado: { "phone": "5511999999999" }
+    """
+    try:
+        body = await request.json()
+        phone = body.get("phone", "").strip()
+
+        # Aceita formato com ou sem @s.whatsapp.net
+        phone = phone.split("@")[0]
+
+        if not phone:
+            raise HTTPException(status_code=400, detail="Campo 'phone' obrigatório")
+
+        from tools.manage_followups import schedule_followups
+        schedule_followups(phone)
+        print(f"[FOLLOWUP] Follow-ups iniciados via n8n para {phone}")
+        return {"status": "success", "message": f"Follow-ups agendados para {phone}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[FOLLOWUP] Erro ao iniciar follow-ups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/mya-disparo/apresentacao")
 async def serve_pdf():
