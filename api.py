@@ -100,6 +100,7 @@ async def receive_whatsapp_webhook(request: Request):
         payload = await request.json()
 
         event_name = payload.get("EventType")
+        print(f"[WEBHOOK] EventType={event_name} | payload_keys={list(payload.keys())} | fromMe={payload.get('message', {}).get('fromMe')} | track_source={payload.get('message', {}).get('track_source')}")
 
         if event_name == "messages":
             msg = payload.get("message", {})
