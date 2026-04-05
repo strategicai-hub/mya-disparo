@@ -122,6 +122,15 @@ def process_message(msg_payload):
         resposta_ai = "Desculpe, não consegui processar sua solicitação no momento. Por favor, tente novamente mais tarde."
     # ------------------------------------------------------------------------------------------
 
+    # 0. Checa MENSAGEM AUTOMATICA (ignora auto-replies detectados pelo LLM)
+    match_auto = re.search(r'<IGNORAR_AUTO>(.*?)</IGNORAR_AUTO>', resposta_ai, re.IGNORECASE)
+    if match_auto:
+        motivo_auto = match_auto.group(1).strip()
+        print(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando.")
+        # Salva no histórico para contexto, mas não responde
+        save_message(phone_number, "ai", f"[auto-reply ignorada: {motivo_auto}]")
+        return
+
     # 1. Checa NOME (via tag XML → fallback padrão 'Muito prazer' → fallback histórico)
     match = re.search(r'<SAVE_NAME>(.*?)</SAVE_NAME>', resposta_ai, re.IGNORECASE)
     if match:
