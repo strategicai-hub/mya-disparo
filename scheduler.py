@@ -61,6 +61,11 @@ def process_due_followups():
         whatsapp_id = f"{phone}@s.whatsapp.net"
 
         if msg_type == "image":
+            # Envia texto de contexto antes da imagem, se houver
+            caption = item.get("message", "")
+            if caption:
+                send_message(whatsapp_id, caption)
+                time.sleep(2)
             image_url = item.get("image_url", "")
             success = send_image(whatsapp_id, image_url)
             print(f"[SCHEDULER] Step {step} (imagem) para {phone}: {'OK' if success else 'FALHA'}")
