@@ -126,15 +126,6 @@ async def receive_whatsapp_webhook(request: Request):
 
                 print(f"=== MENSAGEM RECEBIDA [{phone_number}] ===\nTexto: '{text}'\n============================")
 
-                # Reseta timer de follow-ups quando o lead manda mensagem
-                try:
-                    from tools.manage_followups import reset_followup_timer, has_active_followups
-                    if has_active_followups(phone_number):
-                        reset_followup_timer(phone_number)
-                        print(f"[FOLLOWUP] Timer de follow-ups resetado para {phone_number} (lead respondeu)")
-                except Exception as e:
-                    print(f"[FOLLOWUP] Erro ao resetar follow-ups: {e}")
-
                 # Bypass do debounce para o numero do proprietario (testes rapidos)
                 OWNER_NUMBER = "5511989887525"
                 if phone_number == OWNER_NUMBER:

@@ -126,10 +126,13 @@ def process_message(msg_payload):
     match_auto = re.search(r'<IGNORAR_AUTO>(.*?)</IGNORAR_AUTO>', resposta_ai, re.IGNORECASE)
     if match_auto:
         motivo_auto = match_auto.group(1).strip()
-        print(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando.")
-        # Salva no histórico para contexto, mas não responde
+        print(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando e mantendo follow-ups.")
         save_message(phone_number, "ai", f"[auto-reply ignorada: {motivo_auto}]")
-        return
+        return  # NÃO reseta follow-ups — auto-reply não conta como resposta humana
+
+    # Mensagem humana confirmada → reseta timer de follow-ups
+    from tools.manage_followups import reset_followup_timer
+    reset_followup_timer(phone_number)
 
     # 1. Checa NOME (via tag XML → fallback padrão 'Muito prazer' → fallback histórico)
     match = re.search(r'<SAVE_NAME>(.*?)</SAVE_NAME>', resposta_ai, re.IGNORECASE)
