@@ -28,7 +28,7 @@ INTERVALS_OWNER  = [60, 120, 180]              # 1min, 2min, 3min (teste)
 
 
 def reset_followup_timer(phone_number: str):
-    """Reseta o timer dos follow-ups — cancela os antigos e reagenda do zero."""
+    """Reseta o timer dos follow-ups — cancela os antigos e zera o ciclo (lead respondeu)."""
     if not redis_client:
         return
     if has_active_followups(phone_number):
@@ -36,66 +36,102 @@ def reset_followup_timer(phone_number: str):
         print(f"[FOLLOWUP] Timer resetado para {phone_number} (lead respondeu)")
 
 
-def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: str) -> list:
-    """Gera 3 follow-ups variados e contextuais, sorteando entre variantes."""
+def _get_followup_cycle(phone_number: str) -> int:
+    """Retorna o ciclo atual de follow-up do lead (0 = primeiro ciclo)."""
+    if not redis_client:
+        return 0
+    cycle = redis_client.get(f"{KEY_PREFIX}:followup:cycle:{phone_number}")
+    return int(cycle) if cycle else 0
+
+
+def _advance_followup_cycle(phone_number: str) -> int:
+    """Avança para o próximo ciclo e retorna o novo valor."""
+    if not redis_client:
+        return 0
+    return redis_client.incr(f"{KEY_PREFIX}:followup:cycle:{phone_number}") - 1
+
+
+def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: str, cycle: int = 0) -> list:
+    """Gera 3 follow-ups variados e contextuais, usando ciclos diferentes a cada rodada."""
     saudacao = f"Oi {nome}, " if nome else "Oi, "
-    nome_ou_voce = nome if nome else "você"
 
-    # --- STEP 1: Lembrete leve (1d / 1min teste) ---
-    step1_variants = [
-        f"{saudacao}imagino que seu dia esteja corrido. Conseguiu dar uma olhada no que te mandei?",
-        f"{saudacao}sei que a rotina é puxada. Só passando pra ver se conseguiu ver aquela proposta que te enviei!",
-        f"{saudacao}tudo certo? Queria saber se teve chance de ver o que te mandei sobre a automação por IA",
-        f"E aí {nome_ou_voce}, correria por aí né? Quando tiver um tempinho dá uma olhada no que te mandei, acho que vai curtir!",
-        f"{saudacao}passando rapidinho aqui! Vi que não tivemos chance de conversar ainda sobre o que te enviei",
-    ]
+    # Ciclos de mensagens — cada ciclo é uma experiência diferente
+    if cycle == 0:
+        # --- CICLO 1: Abordagem inicial ---
+        step1_variants = [
+            f"{saudacao}imagino que seu dia esteja corrido. Conseguiu dar uma olhada no que te mandei?",
+            f"{saudacao}sei que a rotina é puxada. Só passando pra ver se conseguiu ver aquela proposta que te enviei!",
+            f"{saudacao}tudo certo? Queria saber se teve chance de ver o que te mandei sobre a automação por IA",
+        ]
+        step2_variants = [
+            "Ah, esqueci de comentar: semana passada a gente instalou a IA em um negócio parecido com o seu e o dono ficou impressionado com a velocidade das respostas",
+            "Só pra te dar um contexto: nossos clientes estão conseguindo atender leads até de madrugada e fim de semana sem precisar de mais ninguém na equipe",
+            "Sabia que a maioria dos negócios perde até 60% dos leads só por demora na resposta? A IA resolve isso de forma instantânea",
+        ]
+        if nicho:
+            step2_variants.append(
+                f"A gente tem cases bem legais na área de {nicho}. Posso te mostrar em 15 minutinhos como funciona na prática!"
+            )
+        step3_variants = [
+            f"{saudacao}entendo que talvez não seja o melhor momento. Vou deixar aqui um resultado que tivemos recentemente, caso mude de ideia é só me chamar!",
+            f"{saudacao}sei que cada um tem seu tempo. Te mando aqui um case pra guardar, e qualquer coisa no futuro estou por aqui!",
+            f"Sem problemas! Vou te deixar com esse resultado que tivemos e fico à disposição quando fizer sentido pra você. Sucesso!",
+        ]
+        # Ciclo 1: envia imagem de resultado no step 3
+        return [
+            {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
+            {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
+            {"phone": phone_number, "step": 3, "type": "image", "image_url": FOLLOWUP_IMAGE_URL, "message": random.choice(step3_variants)},
+        ]
 
-    # --- STEP 2: Prova social / valor (3d / 2min teste) ---
-    step2_base = [
-        f"Ah, esqueci de comentar: semana passada a gente instalou a IA em um negócio parecido com o seu e o dono ficou impressionado com a velocidade das respostas",
-        f"Só pra te dar um contexto: nossos clientes estão conseguindo atender leads até de madrugada e fim de semana sem precisar de mais ninguém na equipe",
-        f"Sabia que a maioria dos negócios perde até 60% dos leads só por demora na resposta? A IA resolve isso de forma instantânea",
-        f"Um dado que achei interessante: os clientes que testaram a IA perceberam diferença já na primeira semana. Acho que vale a pena pelo menos ver funcionando!",
-    ]
-    # Se tem nicho, adiciona variantes específicas
-    if nicho:
-        step2_base.extend([
-            f"{nome_ou_voce}, a gente tem cases bem legais na área de {nicho}. Posso te mostrar em 15 minutinhos como funciona na prática!",
-            f"Temos clientes de {nicho} que já não conseguem imaginar o atendimento sem a IA. Quer ver como ficaria no seu caso?",
-        ])
+    elif cycle == 1:
+        # --- CICLO 2: Curiosidade + urgência leve ---
+        step1_variants = [
+            f"{saudacao}vi que ainda não tivemos chance de conversar. Tem alguma dúvida sobre como a IA funcionaria no seu negócio?",
+            f"{saudacao}passando pra ver se surgiu alguma dúvida. Fico à disposição pra explicar qualquer coisa!",
+        ]
+        step2_variants = [
+            "Uma coisa que os donos de negócio mais gostam: a IA não esquece, não atrasa e não pede folga. Funciona 24h certinho",
+            "Só pra compartilhar: essa semana um cliente nosso disse que a IA já pagou o investimento só com os leads que atendia de madrugada",
+        ]
+        if nicho:
+            step2_variants.append(
+                f"Temos clientes de {nicho} que já não conseguem imaginar o atendimento sem a IA. Quer ver como ficaria no seu caso?"
+            )
+        step3_variants = [
+            f"{saudacao}entendo que o momento pode não ser ideal. Quando fizer sentido, é só chamar que a gente retoma de onde parou!",
+            f"Sem problemas! Quando sentir que é hora, estou por aqui. Sucesso no seu negócio!",
+        ]
+        # Ciclo 2+: NÃO envia imagem (só texto)
+        return [
+            {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
+            {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
+            {"phone": phone_number, "step": 3, "type": "text", "message": random.choice(step3_variants)},
+        ]
 
-    # --- STEP 3: Despedida respeitosa + imagem (7d / 3min teste) ---
-    step3_variants = [
-        f"{saudacao}entendo que talvez não seja o melhor momento. Vou deixar aqui um resultado que tivemos recentemente, caso mude de ideia é só me chamar!",
-        f"{saudacao}sei que cada um tem seu tempo. Te mando aqui um case pra você guardar, e qualquer coisa no futuro estou por aqui!",
-        f"Sem problemas, {nome_ou_voce}! Vou te deixar com esse resultado que tivemos e fico à disposição quando fizer sentido pra você. Sucesso!",
-    ]
-
-    return [
-        {
-            "phone": phone_number,
-            "step": 1,
-            "type": "text",
-            "message": random.choice(step1_variants),
-        },
-        {
-            "phone": phone_number,
-            "step": 2,
-            "type": "text",
-            "message": random.choice(step2_base),
-        },
-        {
-            "phone": phone_number,
-            "step": 3,
-            "type": "image",
-            "image_url": FOLLOWUP_IMAGE_URL,
-            "message": random.choice(step3_variants),
-        },
-    ]
+    else:
+        # --- CICLO 3+: Despedida final (último ciclo, sem repetição) ---
+        step1_variants = [
+            f"{saudacao}não quero ser inconveniente! Só queria garantir que você sabe que estou à disposição caso precise",
+            f"{saudacao}última passada por aqui! Se um dia quiser conhecer a IA, é só mandar um oi",
+        ]
+        step2_variants = [
+            "A gente acredita que o timing é tudo. Quando for o momento certo pra você, estou aqui",
+            "Vou parar de mandar mensagem pra não atrapalhar. Mas se precisar, é só chamar!",
+        ]
+        step3_variants = [
+            "Te desejo muito sucesso! Qualquer coisa no futuro, meu contato fica salvo aqui. Até mais!",
+            "Sucesso no seu negócio! Fico por aqui caso precise. Um abraço!",
+        ]
+        return [
+            {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
+            {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
+            {"phone": phone_number, "step": 3, "type": "text", "message": random.choice(step3_variants)},
+        ]
 
 
 def schedule_followups(phone_number: str, nome: str = "", nicho: str = "", resumo: str = ""):
-    """Agenda 3 follow-ups variados no Redis (sorted set)."""
+    """Agenda 3 follow-ups variados no Redis (sorted set), avançando o ciclo a cada chamada."""
     if not redis_client:
         return
 
@@ -103,10 +139,18 @@ def schedule_followups(phone_number: str, nome: str = "", nicho: str = "", resum
     if has_active_followups(phone_number):
         cancel_followups(phone_number)
 
+    # Avança o ciclo (0 → 1 → 2). Ciclo 2+ = último ciclo, não repete mais
+    cycle = _advance_followup_cycle(phone_number)
+
+    # Ciclo 3+ = já enviou despedida final, não agenda mais
+    if cycle > 2:
+        print(f"[FOLLOWUP] Lead {phone_number} já passou por todos os ciclos. Não reagendando.")
+        return
+
     intervals = INTERVALS_OWNER if phone_number == OWNER_NUMBER else INTERVALS_NORMAL
     now = time.time()
 
-    messages = _build_followup_messages(phone_number, nome, nicho, resumo)
+    messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
 
     followups_key = f"{KEY_PREFIX}:followups"
     for i, msg in enumerate(messages):

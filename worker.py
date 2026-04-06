@@ -10,6 +10,9 @@ from google.genai import types
 from tools.send_whatsapp import send_message
 from tools.manage_history import save_message, get_history
 from tools.manage_leads import save_lead_info, get_lead_info
+from tools.manage_calendar import (
+    consulta_disponibilidade, criar_evento, consulta_id, deleta_evento
+)
 import re
 
 load_dotenv()
@@ -32,6 +35,95 @@ try:
 except FileNotFoundError:
     SYSTEM_PROMPT = "Você é um atendente virtual SDR corporativo. Pergunte o nome do cliente."
     print("AVISO: Arquivo sdr_mya.md não encontrado!")
+
+# --- DEFINIÇÃO DAS TOOLS DO GEMINI (Google Calendar) ---
+CALENDAR_TOOLS = types.Tool(function_declarations=[
+    types.FunctionDeclaration(
+        name="consulta_disponibilidade",
+        description="Consulta os horários ocupados (bookedSlots) de um dia específico no Google Calendar. Use para encontrar lacunas livres e oferecer ao lead.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "data": types.Schema(type="STRING", description="Data no formato YYYY-MM-DD"),
+            },
+            required=["data"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="criar_evento",
+        description="Cria um evento de reunião (demo de 30 min) no Google Calendar. Use SOMENTE após confirmar horário, nome completo e email do lead.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "data": types.Schema(type="STRING", description="Data no formato YYYY-MM-DD"),
+                "horario": types.Schema(type="STRING", description="Horário de início no formato HH:MM"),
+                "nome": types.Schema(type="STRING", description="Nome completo do lead"),
+                "email": types.Schema(type="STRING", description="Email do lead"),
+                "telefone": types.Schema(type="STRING", description="Telefone do lead (opcional)"),
+            },
+            required=["data", "horario", "nome", "email"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="consulta_id",
+        description="Busca eventos agendados pelo telefone do lead. Use para encontrar o ID de um evento antes de cancelar.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "telefone": types.Schema(type="STRING", description="Telefone do lead"),
+                "data": types.Schema(type="STRING", description="Data opcional no formato YYYY-MM-DD para filtrar"),
+            },
+            required=["telefone"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="deleta_evento",
+        description="Cancela/deleta um evento do Google Calendar pelo ID. Use após consultar o ID com consulta_id.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "event_id": types.Schema(type="STRING", description="ID do evento no Google Calendar"),
+            },
+            required=["event_id"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="lead_agendou",
+        description="Notifica a equipe via WhatsApp que um lead agendou uma reunião. Chame APÓS criar o evento com sucesso.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "nome": types.Schema(type="STRING", description="Nome do lead"),
+                "telefone": types.Schema(type="STRING", description="Telefone do lead"),
+                "dia_horario": types.Schema(type="STRING", description="Dia e horário da reunião ex: '15/04 às 10:00'"),
+            },
+            required=["nome", "telefone", "dia_horario"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="reuniao_agendada",
+        description="Cancela os follow-ups do lead após agendamento confirmado. Chame APÓS criar o evento com sucesso.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "telefone": types.Schema(type="STRING", description="Telefone do lead"),
+            },
+            required=["telefone"]
+        )
+    ),
+])
+
+# Mapeamento nome → função real
+TOOL_DISPATCH = {
+    "consulta_disponibilidade": lambda args: consulta_disponibilidade(args["data"]),
+    "criar_evento": lambda args: criar_evento(
+        args["data"], args["horario"], args["nome"], args["email"], args.get("telefone", "")
+    ),
+    "consulta_id": lambda args: consulta_id(args["telefone"], args.get("data", "")),
+    "deleta_evento": lambda args: deleta_evento(args["event_id"]),
+    "lead_agendou": None,       # Tratado diretamente no loop
+    "reuniao_agendada": None,   # Tratado diretamente no loop
+}
 
 def process_message(msg_payload):
     """
@@ -87,7 +179,8 @@ def process_message(msg_payload):
     historico = get_history(phone_number)
     print(f"Chamando o Agente (LLM) com workflow SDR_MYA para responder a: {text_message}")
 
-    # --- CHAMADA REAL AO LLM (Gemini) ---
+    # --- CHAMADA REAL AO LLM (Gemini) COM FUNCTION CALLING ---
+    evento_criado = False
     try:
         model_id = "gemini-2.5-flash"
         gemini_history = []
@@ -102,13 +195,76 @@ def process_message(msg_payload):
         chat = client.chats.create(
             model=model_id,
             config=types.GenerateContentConfig(
-                system_instruction=prompt_completo,  # Prompt enriquecido com dados do lead
+                system_instruction=prompt_completo,
+                tools=[CALENDAR_TOOLS],
             ),
             history=gemini_history
         )
 
         response = chat.send_message(text_message)
-        resposta_ai = response.text
+
+        # --- LOOP DE FUNCTION CALLING ---
+        max_tool_rounds = 8
+        tool_round = 0
+
+        while tool_round < max_tool_rounds:
+            # Verifica se a resposta contém function calls
+            function_calls = []
+            if response.candidates and response.candidates[0].content:
+                for part in response.candidates[0].content.parts:
+                    if part.function_call:
+                        function_calls.append(part.function_call)
+
+            if not function_calls:
+                break  # Sem function calls — resposta final de texto
+
+            tool_round += 1
+            print(f"[TOOL CALL] Round {tool_round}: {[fc.name for fc in function_calls]}")
+
+            # Executa cada function call e monta as respostas
+            function_responses = []
+            for fc in function_calls:
+                fn_name = fc.name
+                fn_args = dict(fc.args) if fc.args else {}
+                print(f"[TOOL] Executando {fn_name}({fn_args})")
+
+                if fn_name == "lead_agendou":
+                    # Notifica equipe via WhatsApp
+                    from tools.send_whatsapp import send_message as sms_raw
+                    alerta = (
+                        f"📅 *LEAD AGENDOU REUNIÃO* 📅\n"
+                        f"Nome: {fn_args.get('nome', '?')}\n"
+                        f"Telefone: {fn_args.get('telefone', '?')}\n"
+                        f"Dia/Horário: {fn_args.get('dia_horario', '?')}"
+                    )
+                    sms_raw("5511989887525@s.whatsapp.net", alerta)
+                    result = {"success": True, "message": "Equipe notificada"}
+                elif fn_name == "reuniao_agendada":
+                    # Cancela follow-ups
+                    from tools.manage_followups import cancel_followups
+                    cancel_followups(fn_args.get("telefone", phone_number))
+                    result = {"success": True, "message": "Follow-ups cancelados"}
+                    evento_criado = True
+                else:
+                    dispatch = TOOL_DISPATCH.get(fn_name)
+                    if dispatch:
+                        result = dispatch(fn_args)
+                    else:
+                        result = {"error": f"Tool '{fn_name}' não encontrada"}
+
+                print(f"[TOOL] Resultado de {fn_name}: {json.dumps(result, ensure_ascii=False)[:200]}")
+                function_responses.append(
+                    types.Part(function_response=types.FunctionResponse(
+                        name=fn_name,
+                        response=result
+                    ))
+                )
+
+            # Envia os resultados de volta ao modelo
+            response = chat.send_message(function_responses)
+
+        # Extrai a resposta final de texto
+        resposta_ai = response.text or ""
 
         # Log de uso de tokens
         if response.usage_metadata:
@@ -119,6 +275,8 @@ def process_message(msg_payload):
 
     except Exception as e:
         print(f"Erro ao chamar o LLM: {e}")
+        import traceback
+        traceback.print_exc()
         resposta_ai = "Desculpe, não consegui processar sua solicitação no momento. Por favor, tente novamente mais tarde."
     # ------------------------------------------------------------------------------------------
 
@@ -243,7 +401,8 @@ def process_message(msg_payload):
                 print("A API da Uazapi falhou no envio. Manter no log.")
 
     # 6. AGENDA FOLLOW-UPS após toda resposta enviada (reseta timer se já existiam)
-    if not match_humano:  # Não agenda se acabou de confirmar reunião
+    # Não agenda se: acabou de confirmar reunião via tag OU via function calling (evento_criado)
+    if not match_humano and not evento_criado:
         from tools.manage_followups import schedule_followups
         schedule_followups(phone_number, nome=nome_conhecido, nicho=nicho_conhecido)
         print(f"[FOLLOWUP] Follow-ups agendados/resetados para {phone_number}")
