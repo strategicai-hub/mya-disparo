@@ -11,7 +11,7 @@ from tools.send_whatsapp import send_message
 from tools.manage_history import save_message, get_history
 from tools.manage_leads import save_lead_info, get_lead_info
 from tools.manage_calendar import (
-    consulta_disponibilidade, criar_evento, consulta_id, deleta_evento
+    consulta_disponibilidade, consulta_proximos_horarios, criar_evento, consulta_id, deleta_evento
 )
 import re
 
@@ -39,8 +39,20 @@ except FileNotFoundError:
 # --- DEFINIÇÃO DAS TOOLS DO GEMINI (Google Calendar) ---
 CALENDAR_TOOLS = types.Tool(function_declarations=[
     types.FunctionDeclaration(
+        name="consulta_proximos_horarios",
+        description="Busca os próximos horários disponíveis a partir de uma data, iterando dia a dia automaticamente. Use SEMPRE que o lead pedir horários — a tool já calcula gaps, antecedência e horários de atendimento.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "data_inicio": types.Schema(type="STRING", description="Data de início da busca no formato YYYY-MM-DD"),
+                "quantidade": types.Schema(type="INTEGER", description="Número de slots a retornar (padrão 3)"),
+            },
+            required=["data_inicio"]
+        )
+    ),
+    types.FunctionDeclaration(
         name="consulta_disponibilidade",
-        description="Consulta os horários ocupados (bookedSlots) de um dia específico no Google Calendar. Use para encontrar lacunas livres e oferecer ao lead.",
+        description="Consulta os horários ocupados (bookedSlots) de um dia específico no Google Calendar. Prefira consulta_proximos_horarios para oferecer horários ao lead.",
         parameters=types.Schema(
             type="OBJECT",
             properties={
@@ -115,6 +127,7 @@ CALENDAR_TOOLS = types.Tool(function_declarations=[
 
 # Mapeamento nome → função real
 TOOL_DISPATCH = {
+    "consulta_proximos_horarios": lambda args: consulta_proximos_horarios(args["data_inicio"], args.get("quantidade", 3)),
     "consulta_disponibilidade": lambda args: consulta_disponibilidade(args["data"]),
     "criar_evento": lambda args: criar_evento(
         args["data"], args["horario"], args["nome"], args["email"], args.get("telefone", "")
@@ -170,7 +183,7 @@ def process_message(msg_payload):
         if nicho_conhecido:
             contexto_lead += f"- **Nicho/Área:** {nicho_conhecido}\n"
         if resumo_conhecido:
-            contexto_lead += f"- **Resumo da última conversa:** {resumo_conhecido}\n"
+            contexto_lead += f"- **Resumo acumulado da conversa:** {resumo_conhecido}\n"
         contexto_lead += "\nUse essas informações para personalizar a conversa. Chame-o pelo nome quando natural."
 
     # Injeta data/hora atual (timezone São Paulo) no prompt para o LLM saber "hoje"

@@ -250,6 +250,115 @@ def consulta_id(telefone: str, data: str = "") -> dict:
     return {"events": found, "total": len(found)}
 
 
+def consulta_proximos_horarios(data_inicio: str, quantidade: int = 3) -> dict:
+    """
+    Busca os próximos N horários disponíveis a partir de data_inicio, iterando dia a dia.
+    Respeita horários de atendimento, eventos agendados, gap de 15min e antecedência de 4h.
+
+    Args:
+        data_inicio: Data de início da busca no formato "YYYY-MM-DD"
+        quantidade: Número de slots a retornar (padrão 3)
+
+    Returns:
+        Dict com 'slots_disponiveis' (lista de {date, weekday, start, end}), 'total' e metadados.
+    """
+    service = _get_calendar_service()
+    if not service:
+        return {"error": "Não foi possível conectar ao Google Calendar"}
+
+    try:
+        start_date = datetime.strptime(data_inicio, "%Y-%m-%d")
+    except ValueError:
+        return {"error": f"Data inválida: {data_inicio}. Use o formato YYYY-MM-DD"}
+
+    now_sp = datetime.now(SAO_PAULO_TZ)
+    min_start = now_sp + timedelta(hours=ANTECEDENCIA_HORAS)
+
+    available = []
+    current_date = datetime(start_date.year, start_date.month, start_date.day, tzinfo=SAO_PAULO_TZ)
+
+    for _ in range(30):
+        if len(available) >= quantidade:
+            break
+
+        weekday = current_date.weekday()
+        periodos = HORARIOS_ATENDIMENTO.get(weekday, [])
+
+        if periodos:
+            day_start = current_date
+            day_end = current_date.replace(hour=23, minute=59, second=59)
+
+            try:
+                events_result = service.events().list(
+                    calendarId=CALENDAR_ID,
+                    timeMin=day_start.isoformat(),
+                    timeMax=day_end.isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime"
+                ).execute()
+                events = events_result.get("items", [])
+            except Exception:
+                events = []
+
+            booked = []
+            for ev in events:
+                start_str = ev["start"].get("dateTime", "")
+                end_str = ev["end"].get("dateTime", "")
+                if start_str and end_str:
+                    try:
+                        ev_start = datetime.fromisoformat(start_str).astimezone(SAO_PAULO_TZ)
+                        ev_end = datetime.fromisoformat(end_str).astimezone(SAO_PAULO_TZ)
+                        booked.append((ev_start, ev_end))
+                    except Exception:
+                        pass
+
+            weekday_name = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"][weekday]
+
+            for inicio_h, fim_h in periodos:
+                slot_time = current_date.replace(hour=inicio_h, minute=0, second=0, microsecond=0)
+                period_end = current_date.replace(hour=fim_h, minute=0, second=0, microsecond=0)
+
+                while slot_time + timedelta(minutes=SLOT_DURACAO_MIN) <= period_end:
+                    slot_end = slot_time + timedelta(minutes=SLOT_DURACAO_MIN)
+
+                    if slot_time < min_start:
+                        slot_time += timedelta(minutes=SLOT_DURACAO_MIN)
+                        continue
+
+                    conflict = False
+                    for ev_start, ev_end in booked:
+                        if (slot_time < ev_end + timedelta(minutes=GAP_MIN) and
+                                slot_end > ev_start - timedelta(minutes=GAP_MIN)):
+                            conflict = True
+                            break
+
+                    if not conflict:
+                        available.append({
+                            "date": current_date.strftime("%Y-%m-%d"),
+                            "weekday": weekday_name,
+                            "start": slot_time.strftime("%H:%M"),
+                            "end": slot_end.strftime("%H:%M"),
+                        })
+                        if len(available) >= quantidade:
+                            break
+
+                    slot_time += timedelta(minutes=SLOT_DURACAO_MIN)
+
+                if len(available) >= quantidade:
+                    break
+
+        current_date += timedelta(days=1)
+
+    return {
+        "slots_disponiveis": available,
+        "total": len(available),
+        "pesquisado_a_partir_de": data_inicio,
+        "now": now_sp.strftime("%Y-%m-%d %H:%M"),
+        "regras": f"Slots de {SLOT_DURACAO_MIN}min. Gap de {GAP_MIN}min entre eventos. Antecedência mínima de {ANTECEDENCIA_HORAS}h.",
+        "instrucao": "Use 'date' e 'start' ao chamar criar_evento. Se não há slots para o dia pedido, informe o lead e ofereça os próximos disponíveis."
+    }
+
+
 def deleta_evento(event_id: str) -> dict:
     """
     Deleta um evento do Google Calendar pelo ID.
