@@ -53,6 +53,7 @@ services:
       - UAZAPI_INSTANCE
       - LLM_API_KEY
       - GOOGLE_CREDENTIALS_JSON
+      - GOOGLE_CALENDAR_ID
     networks:
       - network_public
       - default
