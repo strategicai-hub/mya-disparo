@@ -8,6 +8,7 @@ SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+IMPERSONATE_USER = os.getenv("GOOGLE_IMPERSONATE_USER", "")
 
 # Horários de atendimento por dia da semana (0=seg, 6=dom)
 # Cada dia tem uma lista de (inicio_hora, fim_hora)
@@ -39,6 +40,10 @@ def _get_calendar_service():
     else:
         print("[CALENDAR] ERRO: Nenhuma credencial Google encontrada.")
         return None
+
+    # Domain-Wide Delegation: service account age em nome do usuário do Workspace
+    if IMPERSONATE_USER:
+        creds = creds.with_subject(IMPERSONATE_USER)
 
     return build("calendar", "v3", credentials=creds)
 

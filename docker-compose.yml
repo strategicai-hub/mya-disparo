@@ -54,6 +54,7 @@ services:
       - LLM_API_KEY
       - GOOGLE_CREDENTIALS_JSON
       - GOOGLE_CALENDAR_ID
+      - GOOGLE_IMPERSONATE_USER
     networks:
       - network_public
       - default
