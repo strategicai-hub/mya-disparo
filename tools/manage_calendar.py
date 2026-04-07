@@ -165,7 +165,6 @@ def criar_evento(data: str, horario: str, nome: str, email: str, telefone: str =
             "dateTime": end_dt.isoformat(),
             "timeZone": "America/Sao_Paulo"
         },
-        "attendees": [{"email": email}] if email else [],
         "reminders": {
             "useDefault": False,
             "overrides": [
@@ -178,7 +177,7 @@ def criar_evento(data: str, horario: str, nome: str, email: str, telefone: str =
         event = service.events().insert(
             calendarId=CALENDAR_ID,
             body=event_body,
-            sendUpdates="all"
+            sendUpdates="none"
         ).execute()
 
         event_id = event.get("id", "")
