@@ -24,8 +24,9 @@ KEY_PREFIX = "disparo"
 
 # Intervalos em segundos
 INTERVALS_NORMAL = [86400, 259200, 604800]    # 1d, 3d, 7d
-INTERVALS_OWNER  = [60, 120, 180]              # 1min, 2min, 3min (teste)
+INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d
 
+#[60, 120, 180]              # 1min, 2min, 3min (teste)
 
 def reset_followup_timer(phone_number: str):
     """Reseta o timer dos follow-ups — cancela os antigos e zera o ciclo (lead respondeu)."""

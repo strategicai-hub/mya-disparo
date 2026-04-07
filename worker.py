@@ -173,7 +173,19 @@ def process_message(msg_payload):
             contexto_lead += f"- **Resumo da última conversa:** {resumo_conhecido}\n"
         contexto_lead += "\nUse essas informações para personalizar a conversa. Chame-o pelo nome quando natural."
 
-    prompt_completo = SYSTEM_PROMPT + contexto_lead
+    # Injeta data/hora atual (timezone São Paulo) no prompt para o LLM saber "hoje"
+    from datetime import datetime, timezone, timedelta
+    _sp_tz = timezone(timedelta(hours=-3))
+    _agora = datetime.now(_sp_tz)
+    _dias_semana = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+    contexto_data = (
+        f"\n\n---\n## 🗓️ DATA E HORA ATUAL (São Paulo)\n"
+        f"- **Hoje:** {_dias_semana[_agora.weekday()]}, {_agora.strftime('%d/%m/%Y')} (formato ISO: {_agora.strftime('%Y-%m-%d')})\n"
+        f"- **Hora atual:** {_agora.strftime('%H:%M')}\n"
+        f"Use SEMPRE essa data como referência ao chamar tools de calendário. Nunca invente datas.\n"
+    )
+
+    prompt_completo = SYSTEM_PROMPT + contexto_lead + contexto_data
 
     # HISTÓRICO CONTEXTUAL PARA O LLM
     historico = get_history(phone_number)
