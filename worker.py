@@ -71,7 +71,9 @@ CALENDAR_TOOLS = types.Tool(function_declarations=[
                 "horario": types.Schema(type="STRING", description="Horário de início no formato HH:MM"),
                 "nome": types.Schema(type="STRING", description="Nome completo do lead"),
                 "email": types.Schema(type="STRING", description="Email do lead"),
-                "telefone": types.Schema(type="STRING", description="Telefone do lead (opcional)"),
+                "telefone": types.Schema(type="STRING", description="Telefone do lead (número do WhatsApp)"),
+                "nicho": types.Schema(type="STRING", description="Nicho/segmento do lead (do memo do lead)"),
+                "wa_name": types.Schema(type="STRING", description="Nome salvo no WhatsApp / nome da empresa (do memo do lead)"),
             },
             required=["data", "horario", "nome", "email"]
         )
@@ -130,7 +132,8 @@ TOOL_DISPATCH = {
     "consulta_proximos_horarios": lambda args: consulta_proximos_horarios(args["data_inicio"], args.get("quantidade", 3)),
     "consulta_disponibilidade": lambda args: consulta_disponibilidade(args["data"]),
     "criar_evento": lambda args: criar_evento(
-        args["data"], args["horario"], args["nome"], args["email"], args.get("telefone", "")
+        args["data"], args["horario"], args["nome"], args["email"],
+        args.get("telefone", ""), args.get("nicho", ""), args.get("wa_name", "")
     ),
     "consulta_id": lambda args: consulta_id(args["telefone"], args.get("data", "")),
     "deleta_evento": lambda args: deleta_evento(args["event_id"]),
@@ -175,16 +178,17 @@ def process_message(msg_payload):
     resumo_conhecido = lead_info.get("resumo", "")
 
     # Constrói o contexto do lead para injetar no System Prompt
-    contexto_lead = ""
-    if nome_conhecido or nicho_conhecido:
-        contexto_lead = "\n\n---\n## 📎 MEMO DO LEAD ATUAL\n"
-        if nome_conhecido:
-            contexto_lead += f"- **Nome:** {nome_conhecido}\n"
-        if nicho_conhecido:
-            contexto_lead += f"- **Nicho/Área:** {nicho_conhecido}\n"
-        if resumo_conhecido:
-            contexto_lead += f"- **Resumo acumulado da conversa:** {resumo_conhecido}\n"
-        contexto_lead += "\nUse essas informações para personalizar a conversa. Chame-o pelo nome quando natural."
+    contexto_lead = f"\n\n---\n## 📎 MEMO DO LEAD ATUAL\n"
+    contexto_lead += f"- **Telefone (WhatsApp):** {phone_number}\n"
+    if push_name:
+        contexto_lead += f"- **Nome no WhatsApp (wa_name):** {push_name}\n"
+    if nome_conhecido:
+        contexto_lead += f"- **Nome:** {nome_conhecido}\n"
+    if nicho_conhecido:
+        contexto_lead += f"- **Nicho/Área:** {nicho_conhecido}\n"
+    if resumo_conhecido:
+        contexto_lead += f"- **Resumo acumulado da conversa:** {resumo_conhecido}\n"
+    contexto_lead += "\nUse essas informações para personalizar a conversa. Chame-o pelo nome quando natural."
 
     # Injeta data/hora atual (timezone São Paulo) no prompt para o LLM saber "hoje"
     from datetime import datetime, timezone, timedelta

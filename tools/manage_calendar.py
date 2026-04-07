@@ -124,7 +124,7 @@ def consulta_disponibilidade(data: str) -> dict:
     }
 
 
-def criar_evento(data: str, horario: str, nome: str, email: str, telefone: str = "") -> dict:
+def criar_evento(data: str, horario: str, nome: str, email: str, telefone: str = "", nicho: str = "", wa_name: str = "") -> dict:
     """
     Cria um evento de 30 minutos no Google Calendar.
 
@@ -134,6 +134,8 @@ def criar_evento(data: str, horario: str, nome: str, email: str, telefone: str =
         nome: Nome completo do lead
         email: Email do lead
         telefone: Telefone do lead (opcional)
+        nicho: Nicho/segmento do lead (opcional)
+        wa_name: Nome salvo no WhatsApp / nome da empresa (opcional)
 
     Returns:
         Dict com 'event_id', 'start', 'end' ou 'error'.
@@ -150,12 +152,24 @@ def criar_evento(data: str, horario: str, nome: str, email: str, telefone: str =
 
     end_dt = start_dt + timedelta(minutes=SLOT_DURACAO_MIN)
 
-    descricao = f"Reunião agendada via Mya (WhatsApp)\nNome: {nome}\nEmail: {email}"
-    if telefone:
-        descricao += f"\nTelefone: {telefone}"
+    # Formata telefone: remove espaços/hífens e garante prefixo 55
+    telefone_fmt = telefone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if telefone_fmt and not telefone_fmt.startswith("55"):
+        telefone_fmt = "55" + telefone_fmt
+
+    descricao_linhas = []
+    if telefone_fmt:
+        descricao_linhas.append(f"Whatsapp: {telefone_fmt}")
+    if nicho:
+        descricao_linhas.append(f"Nicho: {nicho}")
+    if wa_name:
+        descricao_linhas.append(f"Empresa: {wa_name}")
+    if email:
+        descricao_linhas.append(f"Email: {email}")
+    descricao = "\n".join(descricao_linhas)
 
     event_body = {
-        "summary": f"Demo IA - {nome}",
+        "summary": f"Reunião SAI - {nome}",
         "description": descricao,
         "start": {
             "dateTime": start_dt.isoformat(),
