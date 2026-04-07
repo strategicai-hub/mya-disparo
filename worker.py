@@ -176,6 +176,7 @@ def process_message(msg_payload):
     nome_conhecido = lead_info.get("nome", "")
     nicho_conhecido = lead_info.get("nicho", "")
     resumo_conhecido = lead_info.get("resumo", "")
+    event_id_conhecido = lead_info.get("event_id", "")
 
     # Constrói o contexto do lead para injetar no System Prompt
     contexto_lead = f"\n\n---\n## 📎 MEMO DO LEAD ATUAL\n"
@@ -186,6 +187,8 @@ def process_message(msg_payload):
         contexto_lead += f"- **Nome:** {nome_conhecido}\n"
     if nicho_conhecido:
         contexto_lead += f"- **Nicho/Área:** {nicho_conhecido}\n"
+    if event_id_conhecido:
+        contexto_lead += f"- **ID do agendamento ativo:** {event_id_conhecido}\n"
     if resumo_conhecido:
         contexto_lead += f"- **Resumo acumulado da conversa:** {resumo_conhecido}\n"
     contexto_lead += "\nUse essas informações para personalizar a conversa. Chame-o pelo nome quando natural."
@@ -278,6 +281,12 @@ def process_message(msg_payload):
                     dispatch = TOOL_DISPATCH.get(fn_name)
                     if dispatch:
                         result = dispatch(fn_args)
+                        # Salva event_id no CRM após agendamento bem-sucedido
+                        if fn_name == "criar_evento" and result.get("event_id"):
+                            save_lead_info(phone_number, {"event_id": result["event_id"]})
+                        # Limpa event_id do CRM após cancelamento
+                        if fn_name == "deleta_evento" and result.get("success"):
+                            save_lead_info(phone_number, {"event_id": ""})
                     else:
                         result = {"error": f"Tool '{fn_name}' não encontrada"}
 
