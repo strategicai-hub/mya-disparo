@@ -46,5 +46,11 @@ def get_lead_info(phone_number: str) -> dict:
 def clear_lead_info(phone_number: str):
     """"Zera o contexto inteiro do Lead para debug."""
     if redis_client:
-        redis_client.delete(f"{KEY_PREFIX}:lead:{phone_number}")
-        print(f"[CRM] Apagada a memória de CRM do lead {phone_number}")
+        key = f"{KEY_PREFIX}:lead:{phone_number}"
+        result = redis_client.delete(key)
+        if result > 0:
+            print(f"[CRM] ✅ Apagada a memória de CRM do lead {phone_number}")
+        else:
+            print(f"[CRM] ⚠️ Nenhuma chave encontrada para deletar: {key}")
+    else:
+        print(f"[CRM] ❌ Redis não conectado, não foi possível limpar CRM")
