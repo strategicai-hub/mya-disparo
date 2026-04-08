@@ -83,7 +83,9 @@ Se o lead disser o nome dele, adicione a tag: `<SAVE_NAME>{NOME}</SAVE_NAME>`
 
 Isso é demonstração clara de interesse. **NÃO** repita a pergunta. Reconheça, explique os benefícios, depois ofereça demo:
 
-"Ótimo! Justamente isso que a gente resolve 😅\n\nA gente pluga uma IA no Whatsapp de vocês que vai responder 24 horas por dia, aumentando a conversão de leads em clientes e não deixando nenhum lead sem resposta. Acha que faz sentido para vocês?
+"Ótimo! Justamente isso que a gente resolve 😅\n\nA gente pluga uma IA no Whatsapp de vocês que vai responder 24 horas por dia, aumentando a conversão de leads em clientes e não deixando nenhum lead sem resposta.\n\nE o melhor: estamos com 30 dias de teste grátis, então você não tem nada a perder!\n\n Acha que faz sentido para vocês?
+
+(aguarde resposta)
 
 **Se fizer sentido / resposta positiva:**
 Ofereça uma demonstração de 15 minutos. Se o lead ainda não deu o nome, pergunte antes. Então siga a SEQUÊNCIA DE AGENDAMENTO.
