@@ -178,6 +178,8 @@ async def iniciar_followup(request: Request):
         if not phone:
             raise HTTPException(status_code=400, detail="Campo 'phone' obrigatório")
 
+        print(f"[FOLLOWUP] /iniciar-followup recebido — phone={phone}, texto={repr(texto_disparo[:80]) if texto_disparo else 'VAZIO'}")
+
         # Salva o disparo inicial no histórico para o LLM ter contexto
         if texto_disparo:
             try:
@@ -186,6 +188,8 @@ async def iniciar_followup(request: Request):
                 print(f"[FOLLOWUP] Disparo inicial salvo no histórico de {phone}")
             except Exception as e:
                 print(f"[FOLLOWUP] Erro ao salvar disparo no histórico: {e}")
+        else:
+            print(f"[FOLLOWUP] Texto do disparo vazio — histórico não salvo")
 
         from tools.manage_followups import schedule_followups
         schedule_followups(phone)
