@@ -109,6 +109,15 @@ async def receive_whatsapp_webhook(request: Request):
                 raw_chatid = msg.get("chatid", "")
                 lead_phone = raw_chatid.split("@")[0]
                 if lead_phone:
+                    # Salva o disparo inicial no histórico
+                    texto_disparo = msg.get("text", "")
+                    if texto_disparo:
+                        try:
+                            from tools.manage_history import save_message
+                            save_message(lead_phone, "ai", texto_disparo)
+                            print(f"[FOLLOWUP] Disparo inicial salvo no histórico de {lead_phone}")
+                        except Exception as e:
+                            print(f"[FOLLOWUP] Erro ao salvar disparo no histórico: {e}")
                     try:
                         from tools.manage_followups import schedule_followups
                         schedule_followups(lead_phone)
