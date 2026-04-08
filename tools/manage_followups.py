@@ -3,6 +3,7 @@ import time
 import json
 import random
 import redis
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,6 +29,18 @@ INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d
 
 #[60, 120, 180]              # 1min, 2min, 3min (teste)
 
+SAO_PAULO_TZ = timezone(timedelta(hours=-3))
+
+
+def _next_morning_timestamp() -> float:
+    """Retorna um timestamp aleatório entre 8h e 9h do dia seguinte (horário de SP)."""
+    now = datetime.now(SAO_PAULO_TZ)
+    amanha = (now + timedelta(days=1)).replace(
+        hour=8, minute=random.randint(0, 59), second=random.randint(0, 59), microsecond=0
+    )
+    return amanha.timestamp()
+
+
 def reset_followup_timer(phone_number: str):
     """Reseta o timer dos follow-ups — cancela os antigos e zera o ciclo (lead respondeu)."""
     if not redis_client:
@@ -35,6 +48,15 @@ def reset_followup_timer(phone_number: str):
     if has_active_followups(phone_number):
         cancel_followups(phone_number)
         print(f"[FOLLOWUP] Timer resetado para {phone_number} (lead respondeu)")
+
+
+def reset_followup_cycle(phone_number: str):
+    """Zera o ciclo de follow-up do lead (usado no /reset)."""
+    if not redis_client:
+        return
+    cancel_followups(phone_number)
+    redis_client.delete(f"{KEY_PREFIX}:followup:cycle:{phone_number}")
+    print(f"[FOLLOWUP] Ciclo zerado para {phone_number}")
 
 
 def _get_followup_cycle(phone_number: str) -> int:
@@ -151,11 +173,16 @@ def schedule_followups(phone_number: str, nome: str = "", nicho: str = "", resum
     intervals = INTERVALS_OWNER if phone_number == OWNER_NUMBER else INTERVALS_NORMAL
     now = time.time()
 
+    # Step 1: sempre no dia seguinte entre 8h e 9h (horário SP)
+    t1 = _next_morning_timestamp()
+    # Steps 2 e 3: relativos ao step 1
+    timestamps = [t1, t1 + intervals[1] - intervals[0], t1 + intervals[2] - intervals[0]]
+
     messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
 
     followups_key = f"{KEY_PREFIX}:followups"
     for i, msg in enumerate(messages):
-        timestamp = now + intervals[i]
+        timestamp = timestamps[i]
         raw = json.dumps(msg, ensure_ascii=False)
         redis_client.zadd(followups_key, {raw: timestamp})
         redis_client.sadd(f"{KEY_PREFIX}:followup:members:{phone_number}", raw)

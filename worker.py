@@ -162,9 +162,11 @@ def process_message(msg_payload):
     if text_message.strip().lower() == "/reset":
         from tools.manage_history import clear_history
         from tools.manage_leads import clear_lead_info
+        from tools.manage_followups import reset_followup_cycle
         clear_history(phone_number)
         clear_lead_info(phone_number)
-        print("Memória de Chat e CRM apagadas pelo usuário.")
+        reset_followup_cycle(phone_number)
+        print("Memória de Chat, CRM e ciclo de follow-up apagados pelo usuário.")
         send_message(f"{phone_number}@s.whatsapp.net", "✅ *Amnésia Dupla ativada!*\nFui perfeitamente deletada e não faço ideia de nicho ou qualificação sua.\nPode testar a rajada de mensagens do zero.")
         return
 
