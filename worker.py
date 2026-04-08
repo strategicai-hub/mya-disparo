@@ -191,7 +191,7 @@ def process_message(msg_payload):
         contexto_lead += f"- **ID do agendamento ativo:** {event_id_conhecido}\n"
     if resumo_conhecido:
         contexto_lead += f"- **Resumo acumulado da conversa:** {resumo_conhecido}\n"
-    contexto_lead += "\nUse essas informações para personalizar a conversa. Chame-o pelo nome quando natural."
+    contexto_lead += "\nUse o campo **Nome** para chamar o lead (só se estiver preenchido). O campo **Nome no WhatsApp** é apenas para uso em criar_evento — não o use para chamar o lead."
 
     # Injeta data/hora atual (timezone São Paulo) no prompt para o LLM saber "hoje"
     from datetime import datetime, timezone, timedelta

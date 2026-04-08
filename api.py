@@ -170,12 +170,22 @@ async def iniciar_followup(request: Request):
     try:
         body = await request.json()
         phone = body.get("phone", "").strip()
+        texto_disparo = body.get("text", "").strip()
 
         # Aceita formato com ou sem @s.whatsapp.net
         phone = phone.split("@")[0]
 
         if not phone:
             raise HTTPException(status_code=400, detail="Campo 'phone' obrigatório")
+
+        # Salva o disparo inicial no histórico para o LLM ter contexto
+        if texto_disparo:
+            try:
+                from tools.manage_history import save_message
+                save_message(phone, "ai", texto_disparo)
+                print(f"[FOLLOWUP] Disparo inicial salvo no histórico de {phone}")
+            except Exception as e:
+                print(f"[FOLLOWUP] Erro ao salvar disparo no histórico: {e}")
 
         from tools.manage_followups import schedule_followups
         schedule_followups(phone)
