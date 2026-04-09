@@ -167,6 +167,61 @@ async def receive_whatsapp_webhook(request: Request):
         print(f"Erro no webhook: {e}")
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
 
+@app.get("/mya-disparo/logs/leads")
+async def logs_leads():
+    """Retorna todos os leads com dados de CRM."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis indisponível")
+
+    lead_keys = redis_client.keys(f"{KEY_PREFIX}:lead:*")
+    history_keys = redis_client.keys(f"{KEY_PREFIX}:history:*")
+
+    phones = set()
+    for k in lead_keys:
+        phones.add(k.replace(f"{KEY_PREFIX}:lead:", ""))
+    for k in history_keys:
+        phones.add(k.replace(f"{KEY_PREFIX}:history:", ""))
+
+    leads = []
+    for phone in sorted(phones):
+        crm_raw = redis_client.get(f"{KEY_PREFIX}:lead:{phone}")
+        crm = json.loads(crm_raw) if crm_raw else {}
+        msg_count = redis_client.llen(f"{KEY_PREFIX}:history:{phone}")
+        has_followup = redis_client.exists(f"{KEY_PREFIX}:followup:active:{phone}") == 1
+        leads.append({
+            "phone": phone,
+            "nome": crm.get("nome", ""),
+            "nicho": crm.get("nicho", ""),
+            "resumo": crm.get("resumo", ""),
+            "event_id": crm.get("event_id", ""),
+            "msg_count": msg_count,
+            "has_followup": has_followup,
+        })
+
+    leads.sort(key=lambda x: x["msg_count"], reverse=True)
+    return leads
+
+
+@app.get("/mya-disparo/logs/history/{phone}")
+async def logs_history(phone: str):
+    """Retorna o histórico completo de um lead."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis indisponível")
+
+    raw = redis_client.lrange(f"{KEY_PREFIX}:history:{phone}", 0, -1)
+    messages = []
+    for item in raw:
+        try:
+            msg = json.loads(item)
+            messages.append({
+                "role": msg.get("type", ""),
+                "content": msg.get("data", {}).get("content", ""),
+            })
+        except Exception:
+            pass
+    return messages
+
+
 @app.get("/mya-disparo/apresentacao")
 async def serve_pdf():
     """
