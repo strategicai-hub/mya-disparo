@@ -104,26 +104,25 @@ async def receive_whatsapp_webhook(request: Request):
         if event_name == "messages":
             msg = payload.get("message", {})
 
-            # Mensagem de prospecção enviada pelo n8n → agenda follow-ups imediatamente
+            # Mensagem de prospecção enviada pelo n8n → salva histórico e agenda follow-ups
             if msg.get("fromMe") and msg.get("track_source") == "n8n":
                 raw_chatid = msg.get("chatid", "")
                 lead_phone = raw_chatid.split("@")[0]
                 if lead_phone:
-                    # Salva o disparo inicial no histórico
                     texto_disparo = msg.get("text", "")
                     if texto_disparo:
                         try:
                             from tools.manage_history import save_message
                             save_message(lead_phone, "ai", texto_disparo)
-                            print(f"[FOLLOWUP] Disparo inicial salvo no histórico de {lead_phone}")
+                            print(f"[DISPARO] Mensagem salva no histórico de {lead_phone}")
                         except Exception as e:
-                            print(f"[FOLLOWUP] Erro ao salvar disparo no histórico: {e}")
+                            print(f"[DISPARO] Erro ao salvar no histórico: {e}")
                     try:
                         from tools.manage_followups import schedule_followups
                         schedule_followups(lead_phone)
-                        print(f"[FOLLOWUP] Follow-ups agendados para {lead_phone} (disparo n8n)")
+                        print(f"[DISPARO] Follow-ups agendados para {lead_phone}")
                     except Exception as e:
-                        print(f"[FOLLOWUP] Erro ao agendar follow-ups do disparo: {e}")
+                        print(f"[DISPARO] Erro ao agendar follow-ups: {e}")
                 return {"status": "success", "message": "Disparo n8n registrado"}
 
             # Se foi você mesmo quem enviou pelo whats, ignora
@@ -159,48 +158,6 @@ async def receive_whatsapp_webhook(request: Request):
     except Exception as e:
         print(f"Erro no webhook: {e}")
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
-
-@app.post("/mya-disparo/iniciar-followup")
-async def iniciar_followup(request: Request):
-    """
-    Chamado pelo n8n após enviar a mensagem de prospecção.
-    Agenda os follow-ups para o lead imediatamente.
-    Body esperado: { "phone": "5511999999999" }
-    """
-    try:
-        body = await request.json()
-        phone = body.get("phone", "").strip()
-        texto_disparo = body.get("text", "").strip()
-
-        # Aceita formato com ou sem @s.whatsapp.net
-        phone = phone.split("@")[0]
-
-        if not phone:
-            raise HTTPException(status_code=400, detail="Campo 'phone' obrigatório")
-
-        print(f"[FOLLOWUP] /iniciar-followup recebido — phone={phone}, texto={repr(texto_disparo[:80]) if texto_disparo else 'VAZIO'}")
-
-        # Salva o disparo inicial no histórico para o LLM ter contexto
-        if texto_disparo:
-            try:
-                from tools.manage_history import save_message
-                save_message(phone, "ai", texto_disparo)
-                print(f"[FOLLOWUP] Disparo inicial salvo no histórico de {phone}")
-            except Exception as e:
-                print(f"[FOLLOWUP] Erro ao salvar disparo no histórico: {e}")
-        else:
-            print(f"[FOLLOWUP] Texto do disparo vazio — histórico não salvo")
-
-        from tools.manage_followups import schedule_followups
-        schedule_followups(phone)
-        print(f"[FOLLOWUP] Follow-ups iniciados via n8n para {phone}")
-        return {"status": "success", "message": f"Follow-ups agendados para {phone}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[FOLLOWUP] Erro ao iniciar follow-ups: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/mya-disparo/apresentacao")
 async def serve_pdf():
