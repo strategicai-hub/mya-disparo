@@ -222,6 +222,21 @@ async def logs_history(phone: str):
     return messages
 
 
+@app.get("/mya-disparo/logs/events")
+async def logs_events(limit: int = 100):
+    """Retorna os últimos eventos de execução do worker (logs por sessão)."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis indisponível")
+    raw = redis_client.lrange(f"{KEY_PREFIX}:logs", 0, limit - 1)
+    events = []
+    for item in raw:
+        try:
+            events.append(json.loads(item))
+        except Exception:
+            pass
+    return events
+
+
 @app.get("/mya-disparo/apresentacao")
 async def serve_pdf():
     """

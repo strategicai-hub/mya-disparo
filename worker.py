@@ -2,6 +2,7 @@ import os
 import time
 import pika
 import json
+import redis as redis_module
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -16,6 +17,28 @@ from tools.manage_calendar import (
 import re
 
 load_dotenv()
+
+# --- LOG SESSION (captura prints para o Redis) ---
+_LOG_KEY = "disparo:logs"
+try:
+    _log_redis = redis_module.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True)
+    _log_redis.ping()
+except Exception:
+    _log_redis = None
+
+_session_log = []
+
+def log(msg):
+    print(msg)
+    _session_log.append(str(msg))
+
+def _save_session_log(phone_number):
+    global _session_log
+    if _log_redis and _session_log:
+        entry = json.dumps({"ts": time.time(), "phone": phone_number, "lines": list(_session_log)})
+        _log_redis.lpush(_LOG_KEY, entry)
+        _log_redis.ltrim(_LOG_KEY, 0, 499)
+    _session_log = []
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
@@ -153,10 +176,11 @@ def process_message(msg_payload):
     text_message = message_data.get("text", "")
 
     if not text_message:
-        print("Mensagem sem formato de texto inteligível. Ignorando.")
+        log("Mensagem sem formato de texto inteligível. Ignorando.")
+        _save_session_log(phone_number)
         return
 
-    print(f"[{phone_number} - {push_name}] Mensagem: {text_message}")
+    log(f"[{phone_number} - {push_name}] Mensagem: {text_message}")
 
     # Comando Secreto: Reseta a memória sem precisar de acesso via terminal ao Redis
     if text_message.strip().lower() == "/reset":
@@ -166,8 +190,9 @@ def process_message(msg_payload):
         clear_history(phone_number)
         clear_lead_info(phone_number)
         reset_followup_cycle(phone_number)
-        print("Memória de Chat, CRM e ciclo de follow-up apagados pelo usuário.")
+        log("Memória de Chat, CRM e ciclo de follow-up apagados pelo usuário.")
         send_message(f"{phone_number}@s.whatsapp.net", "✅ *Amnésia Dupla ativada!*\nFui perfeitamente deletada e não faço ideia de nicho ou qualificação sua.\nPode testar a rajada de mensagens do zero.")
+        _save_session_log(phone_number)
         return
 
     # Salva o input no Redis
@@ -211,7 +236,7 @@ def process_message(msg_payload):
 
     # HISTÓRICO CONTEXTUAL PARA O LLM
     historico = get_history(phone_number)
-    print(f"Chamando o Agente (LLM) com workflow SDR_MYA para responder a: {text_message}")
+    log(f"Chamando o Agente (LLM) com workflow SDR_MYA para responder a: {text_message}")
 
     # --- CHAMADA REAL AO LLM (Gemini) COM FUNCTION CALLING ---
     evento_criado = False
@@ -257,14 +282,14 @@ def process_message(msg_payload):
                     break  # Sem function calls — resposta final de texto
 
                 tool_round += 1
-                print(f"[TOOL CALL] Round {tool_round}: {[fc.name for fc in function_calls]}")
+                log(f"[TOOL CALL] Round {tool_round}: {[fc.name for fc in function_calls]}")
 
                 # Executa cada function call e monta as respostas
                 function_responses = []
                 for fc in function_calls:
                     fn_name = fc.name
                     fn_args = dict(fc.args) if fc.args else {}
-                    print(f"[TOOL] Executando {fn_name}({fn_args})")
+                    log(f"[TOOL] Executando {fn_name}({fn_args})")
 
                     if fn_name == "lead_agendou":
                         # Notifica equipe via WhatsApp
@@ -296,7 +321,7 @@ def process_message(msg_payload):
                         else:
                             result = {"error": f"Tool '{fn_name}' não encontrada"}
 
-                    print(f"[TOOL] Resultado de {fn_name}: {json.dumps(result, ensure_ascii=False)[:200]}")
+                    log(f"[TOOL] Resultado de {fn_name}: {json.dumps(result, ensure_ascii=False)[:200]}")
                     function_responses.append(
                         types.Part(function_response=types.FunctionResponse(
                             name=fn_name,
@@ -315,17 +340,17 @@ def process_message(msg_payload):
                 input_tokens = response.usage_metadata.prompt_token_count
                 output_tokens = response.usage_metadata.candidates_token_count
                 total_tokens = input_tokens + output_tokens
-                print(f"[TOKENS] Entrada: {input_tokens} | Saída: {output_tokens} | Total: {total_tokens}")
+                log(f"[TOKENS] Entrada: {input_tokens} | Saída: {output_tokens} | Total: {total_tokens}")
 
             break  # Sucesso — sai do loop de retry
 
         except Exception as e:
             is_503 = "503" in str(e)
             if is_503 and attempt < MAX_LLM_RETRIES:
-                print(f"[LLM] Erro 503 (alta demanda). Tentativa {attempt}/{MAX_LLM_RETRIES}. Aguardando 5s...")
+                log(f"[LLM] Erro 503 (alta demanda). Tentativa {attempt}/{MAX_LLM_RETRIES}. Aguardando 5s...")
                 time.sleep(5)
             else:
-                print(f"Erro ao chamar o LLM (tentativa {attempt}/{MAX_LLM_RETRIES}): {e}")
+                log(f"Erro ao chamar o LLM (tentativa {attempt}/{MAX_LLM_RETRIES}): {e}")
                 import traceback
                 traceback.print_exc()
                 break
@@ -343,8 +368,9 @@ def process_message(msg_payload):
     match_auto = re.search(r'<IGNORAR_AUTO>(.*?)</IGNORAR_AUTO>', resposta_ai, re.IGNORECASE)
     if match_auto:
         motivo_auto = match_auto.group(1).strip()
-        print(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando e mantendo follow-ups.")
+        log(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando e mantendo follow-ups.")
         save_message(phone_number, "ai", f"[auto-reply ignorada: {motivo_auto}]")
+        _save_session_log(phone_number)
         return  # NÃO reseta follow-ups — auto-reply não conta como resposta humana
 
     # Mensagem humana confirmada → reseta timer de follow-ups
@@ -357,7 +383,7 @@ def process_message(msg_payload):
         nome_lead = match.group(1).strip()
         save_lead_info(phone_number, {"nome": nome_lead, "whatsapp": phone_number})
         nome_conhecido = nome_lead  # Atualiza local para schedule_followups usar o valor correto
-        print(f"[CRM] Nome salvo via tag: {nome_lead}")
+        log(f"[CRM] Nome salvo via tag: {nome_lead}")
         resposta_ai = re.sub(r'<SAVE_NAME>.*?</SAVE_NAME>', '', resposta_ai, flags=re.IGNORECASE).strip()
     elif not nome_conhecido:
         # Fallback 1: detecta 'Muito prazer, X!' — sem IGNORECASE para exigir inicial maiúscula (evita capturar verbos como "ajudar")
@@ -366,7 +392,7 @@ def process_message(msg_payload):
             nome_lead = fallback_texto.group(1).strip()
             save_lead_info(phone_number, {"nome": nome_lead, "whatsapp": phone_number})
             nome_conhecido = nome_lead  # Atualiza local
-            print(f"[CRM] Nome salvo via fallback texto: {nome_lead}")
+            log(f"[CRM] Nome salvo via fallback texto: {nome_lead}")
         else:
             # Fallback 2: se a IA mandou saudação de nome, a mensagem ANTERIOR do humano era o nome
             saudacao_nome = re.search(r'(?:muito prazer|que nome bonito|que nome lindo|boa tarde|bom dia|boa noite),?\s', resposta_ai, re.IGNORECASE)
@@ -379,7 +405,7 @@ def process_message(msg_payload):
                     if ultima_humana and len(ultima_humana.split()) <= 3 and re.match(r'^[A-Za-zÀ-ÿ\s]+$', ultima_humana):
                         save_lead_info(phone_number, {"nome": ultima_humana.title(), "whatsapp": phone_number})
                         nome_conhecido = ultima_humana.title()  # Atualiza local
-                        print(f"[CRM] Nome salvo via histórico: {ultima_humana.title()}")
+                        log(f"[CRM] Nome salvo via histórico: {ultima_humana.title()}")
 
     # 2a. Checa NICHO (via tag <SAVE_NICHO> — apenas 2-3 palavras do negócio)
     match_nicho = re.search(r'<SAVE_NICHO>(.*?)</SAVE_NICHO>', resposta_ai, re.IGNORECASE)
@@ -387,7 +413,7 @@ def process_message(msg_payload):
         nicho_tag = match_nicho.group(1).strip()
         save_lead_info(phone_number, {"nicho": nicho_tag})
         resposta_ai = re.sub(r'<SAVE_NICHO>.*?</SAVE_NICHO>', '', resposta_ai, flags=re.IGNORECASE).strip()
-        print(f"[CRM] Nicho salvo via tag: {nicho_tag}")
+        log(f"[CRM] Nicho salvo via tag: {nicho_tag}")
         nicho_conhecido = nicho_tag
     elif '[PDF_APRESENTACAO]' in resposta_ai and not nicho_conhecido:
         # Fallback: quando a IA dispara o PDF, a última mensagem humana era o nicho
@@ -396,7 +422,7 @@ def process_message(msg_payload):
             nicho_detectado = msgs_humanas[-1].get("data", {}).get("content", "").strip()
             if nicho_detectado:
                 save_lead_info(phone_number, {"nicho": nicho_detectado})
-                print(f"[CRM] Nicho salvo via histórico (fallback PDF): {nicho_detectado}")
+                log(f"[CRM] Nicho salvo via histórico (fallback PDF): {nicho_detectado}")
                 nicho_conhecido = nicho_detectado  # Atualiza para usar no Sheets abaixo
 
     # 2b. Checa RESUMO (via tag <SAVE_RESUMO> — atualiza após toda troca de mensagem)
@@ -406,7 +432,7 @@ def process_message(msg_payload):
         resumo_texto = match_resumo.group(1).strip()
         save_lead_info(phone_number, {"resumo": resumo_texto})
         resposta_ai = re.sub(r'<SAVE_RESUMO>.*?</SAVE_RESUMO>', '', resposta_ai, flags=re.IGNORECASE).strip()
-        print(f"[CRM] Resumo atualizado: {resumo_texto}")
+        log(f"[CRM] Resumo atualizado: {resumo_texto}")
 
     # Salva/atualiza na planilha Google Sheets a cada mensagem (upsert por telefone)
     try:
@@ -419,7 +445,7 @@ def process_message(msg_payload):
             resumo=resumo_texto or lead_info_atual.get("resumo", "")
         )
     except Exception as e:
-        print(f"[SHEETS] Falha ao salvar na planilha (não crítico): {e}")
+        log(f"[SHEETS] Falha ao salvar na planilha (não crítico): {e}")
 
 
     # 3. Checa ALARME DE EQUIPE (Atendimento Humano)
@@ -446,25 +472,27 @@ def process_message(msg_payload):
                 send_message(f"{phone_number}@s.whatsapp.net", clean_text)
                 time.sleep(2)
 
-            print("Mya solicitou envio da apresentação PDF. Disparando...")
+            log("Mya solicitou envio da apresentação PDF. Disparando...")
             from tools.send_media import send_pdf
             send_pdf(phone_number + "@s.whatsapp.net", "apresentacao_mya.pdf")
             time.sleep(4) # Tempo de respiro de documento
         else:
             sucesso = send_message(f"{phone_number}@s.whatsapp.net", msg_text)
             if sucesso:
-                print(f"[{indice+1}/{len(mensagens)}] Mensagem fatiada enviada.")
+                log(f"[{indice+1}/{len(mensagens)}] Mensagem fatiada enviada.")
                 if indice < len(mensagens) - 1:
                     time.sleep(2)
             else:
-                print("A API da Uazapi falhou no envio. Manter no log.")
+                log("A API da Uazapi falhou no envio. Manter no log.")
 
     # 6. AGENDA FOLLOW-UPS após toda resposta enviada (reseta timer se já existiam)
     # Não agenda se: acabou de confirmar reunião via tag OU via function calling (evento_criado)
     if not match_humano and not evento_criado:
         from tools.manage_followups import schedule_followups
         schedule_followups(phone_number, nome=nome_conhecido, nicho=nicho_conhecido)
-        print(f"[FOLLOWUP] Follow-ups agendados/resetados para {phone_number}")
+        log(f"[FOLLOWUP] Follow-ups agendados/resetados para {phone_number}")
+
+    _save_session_log(phone_number)
 
 def callback(ch, method, properties, body):
     """Função invocada sempre que chegou nova msg do RabbitMQ."""
