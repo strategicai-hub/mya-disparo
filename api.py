@@ -134,7 +134,16 @@ async def receive_whatsapp_webhook(request: Request):
                         print(f"[DISPARO] Erro ao agendar follow-ups: {e}")
                 return {"status": "success", "message": "Disparo n8n registrado"}
 
-            # Se foi você mesmo quem enviou pelo whats, ignora
+            # Mensagem enviada manualmente (Chatwoot ou WhatsApp direto) → bloqueia IA por 1h
+            if msg.get("fromMe"):
+                raw_chatid = msg.get("chatid", "")
+                lead_phone = raw_chatid.split("@")[0]
+                if lead_phone and redis_client:
+                    redis_client.setex(f"{KEY_PREFIX}:ai_blocked:{lead_phone}", 3600, "manual")
+                    print(f"[CHATWOOT] Mensagem manual para {lead_phone}. IA bloqueada por 1h.")
+                return {"status": "success", "message": "Mensagem manual registrada"}
+
+            # Mensagem recebida do lead
             if not msg.get("fromMe", True):
 
                 raw_sender = msg.get("sender_pn") or msg.get("chatid") or msg.get("sender", "")
@@ -251,14 +260,18 @@ async def receive_chatwoot_webhook(request: Request):
     """
     try:
         payload = await request.json()
+        print(f"[CHATWOOT] Webhook recebido: {json.dumps(payload, ensure_ascii=False)[:500]}")
+
         event = payload.get("event", "")
 
         if event != "message_created":
+            print(f"[CHATWOOT] Evento ignorado: {event}")
             return {"status": "ignored"}
 
         # message_type: 1 ou "outgoing" = mensagem enviada pelo agente
         msg_type = payload.get("message_type")
         is_outgoing = msg_type == 1 or msg_type == "outgoing"
+        print(f"[CHATWOOT] message_type={msg_type!r}, is_outgoing={is_outgoing}")
 
         if not is_outgoing:
             return {"status": "ignored", "reason": "not outgoing"}
@@ -268,9 +281,10 @@ async def receive_chatwoot_webhook(request: Request):
         meta = conversation.get("meta", {})
         sender = meta.get("sender", {})
         phone_raw = sender.get("phone_number", "")
+        print(f"[CHATWOOT] phone_raw extraído: {phone_raw!r} | meta.sender: {sender}")
 
         if not phone_raw:
-            print("[CHATWOOT] Webhook recebido sem phone_number no payload.")
+            print("[CHATWOOT] ERRO: phone_number não encontrado no payload.")
             return {"status": "error", "reason": "phone not found"}
 
         # Normaliza: remove caracteres não numéricos (ex: "+55..." → "55...")
