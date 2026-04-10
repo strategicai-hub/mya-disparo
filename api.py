@@ -134,13 +134,16 @@ async def receive_whatsapp_webhook(request: Request):
                         print(f"[DISPARO] Erro ao agendar follow-ups: {e}")
                 return {"status": "success", "message": "Disparo n8n registrado"}
 
-            # Mensagem enviada manualmente (Chatwoot ou WhatsApp direto) → bloqueia IA por 1h
+            # Mensagem enviada manualmente (Chatwoot/WhatsApp direto) → bloqueia IA por 1h
+            # Ignora mensagens da própria Mya (track_source="mya_bot") e do n8n
             if msg.get("fromMe"):
-                raw_chatid = msg.get("chatid", "")
-                lead_phone = raw_chatid.split("@")[0]
-                if lead_phone and redis_client:
-                    redis_client.setex(f"{KEY_PREFIX}:ai_blocked:{lead_phone}", 3600, "manual")
-                    print(f"[CHATWOOT] Mensagem manual para {lead_phone}. IA bloqueada por 1h.")
+                track = msg.get("track_source", "")
+                if track not in ("n8n", "IA"):
+                    raw_chatid = msg.get("chatid", "")
+                    lead_phone = raw_chatid.split("@")[0]
+                    if lead_phone and redis_client:
+                        redis_client.setex(f"{KEY_PREFIX}:ai_blocked:{lead_phone}", 3600, "manual")
+                        print(f"[CHATWOOT] Mensagem manual para {lead_phone}. IA bloqueada por 1h.")
                 return {"status": "success", "message": "Mensagem manual registrada"}
 
             # Mensagem recebida do lead

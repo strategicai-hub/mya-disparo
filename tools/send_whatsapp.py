@@ -30,7 +30,8 @@ def send_message(phone_number, text):
     payload = {
         "number": phone_number,
         "text": text,
-        "delay": 4000 # Delay opcional de digitação (4s)
+        "delay": 4000, # Delay opcional de digitação (4s)
+        "track_source": "IA"
     }
 
     try:
