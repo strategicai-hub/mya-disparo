@@ -420,7 +420,17 @@ def process_message(msg_payload):
         log(f"[SHEETS] Falha ao salvar na planilha (não crítico): {e}")
 
 
-    # 3. Checa ALARME DE EQUIPE (Atendimento Humano)
+    # 3. Checa SEM_INTERESSE (lead recusou definitivamente → cancela follow-ups)
+    match_sem_interesse = re.search(r'<SEM_INTERESSE\s*/?>', resposta_ai, re.IGNORECASE)
+    sem_interesse = False
+    if match_sem_interesse:
+        from tools.manage_followups import cancel_followups as cancel_fu_si
+        cancel_fu_si(phone_number)
+        sem_interesse = True
+        resposta_ai = re.sub(r'<SEM_INTERESSE\s*/?>', '', resposta_ai, flags=re.IGNORECASE).strip()
+        log(f"[FOLLOWUP] Lead {phone_number} sem interesse — follow-ups cancelados")
+
+    # 4. Checa ALARME DE EQUIPE (Atendimento Humano)
     match_humano = re.search(r'<ATENDIMENTO_HUMANO>(.*?)</ATENDIMENTO_HUMANO>', resposta_ai, re.IGNORECASE)
     if match_humano:
         motivo = match_humano.group(1).strip()
@@ -431,10 +441,10 @@ def process_message(msg_payload):
         from tools.manage_followups import cancel_followups as cancel_fu
         cancel_fu(phone_number)
 
-    # 4. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
+    # 5. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
     save_message(phone_number, "ai", resposta_ai.replace("[PDF_APRESENTACAO]", "").strip())
 
-    # 5. FATIADOR DE MENSAGENS E DELAY HUMANO COORDENADO
+    # 6. FATIADOR DE MENSAGENS E DELAY HUMANO COORDENADO
     mensagens = [m.strip() for m in resposta_ai.split("\n\n") if m.strip()]
 
     for indice, msg_text in enumerate(mensagens):
@@ -457,9 +467,9 @@ def process_message(msg_payload):
             else:
                 log("A API da Uazapi falhou no envio. Manter no log.")
 
-    # 6. AGENDA FOLLOW-UPS após toda resposta enviada (reseta timer se já existiam)
-    # Não agenda se: acabou de confirmar reunião via tag OU via function calling (evento_criado)
-    if not match_humano and not evento_criado:
+    # 7. AGENDA FOLLOW-UPS após toda resposta enviada (reseta timer se já existiam)
+    # Não agenda se: acabou de confirmar reunião via tag OU via function calling (evento_criado) OU lead sem interesse
+    if not match_humano and not evento_criado and not sem_interesse:
         from tools.manage_followups import schedule_followups
         schedule_followups(phone_number, nome=nome_conhecido, nicho=nicho_conhecido)
         log(f"[FOLLOWUP] Follow-ups agendados/resetados para {phone_number}")

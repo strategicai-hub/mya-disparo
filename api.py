@@ -1,4 +1,5 @@
 import os
+import re
 import pika
 import json
 import asyncio
@@ -142,6 +143,11 @@ async def receive_whatsapp_webhook(request: Request):
 
                 print(f"=== MENSAGEM RECEBIDA [{phone_number}] ===\nTexto: '{text}'\n============================")
 
+                # Verifica se IA está bloqueada (agente respondendo pelo Chatwoot)
+                if redis_client and redis_client.exists(f"{KEY_PREFIX}:ai_blocked:{phone_number}"):
+                    print(f"[CHATWOOT] IA bloqueada para {phone_number}. Ignorando mensagem do lead.")
+                    return {"status": "success", "message": "IA bloqueada — Chatwoot ativo"}
+
                 # Bypass do debounce para o numero do proprietario (testes rapidos)
                 OWNER_NUMBER = "5511989887525"
                 if phone_number == OWNER_NUMBER:
@@ -235,6 +241,54 @@ async def logs_events(limit: int = 100):
         except Exception:
             pass
     return events
+
+
+@app.post("/chatwoot-webhook")
+async def receive_chatwoot_webhook(request: Request):
+    """
+    Recebe eventos do Chatwoot. Quando agente envia mensagem para um lead,
+    bloqueia a IA por 1 hora para aquele número.
+    """
+    try:
+        payload = await request.json()
+        event = payload.get("event", "")
+
+        if event != "message_created":
+            return {"status": "ignored"}
+
+        # message_type: 1 ou "outgoing" = mensagem enviada pelo agente
+        msg_type = payload.get("message_type")
+        is_outgoing = msg_type == 1 or msg_type == "outgoing"
+
+        if not is_outgoing:
+            return {"status": "ignored", "reason": "not outgoing"}
+
+        # Extrai o telefone do lead da conversa
+        conversation = payload.get("conversation", {})
+        meta = conversation.get("meta", {})
+        sender = meta.get("sender", {})
+        phone_raw = sender.get("phone_number", "")
+
+        if not phone_raw:
+            print("[CHATWOOT] Webhook recebido sem phone_number no payload.")
+            return {"status": "error", "reason": "phone not found"}
+
+        # Normaliza: remove caracteres não numéricos (ex: "+55..." → "55...")
+        phone = re.sub(r'\D', '', phone_raw)
+
+        if not phone:
+            return {"status": "error", "reason": "invalid phone"}
+
+        # Bloqueia a IA por 1 hora para este lead
+        if redis_client:
+            redis_client.setex(f"{KEY_PREFIX}:ai_blocked:{phone}", 3600, "chatwoot")
+            print(f"[CHATWOOT] IA bloqueada por 1h para {phone} (agente respondeu via Chatwoot)")
+
+        return {"status": "success", "phone": phone, "blocked_seconds": 3600}
+
+    except Exception as e:
+        print(f"Erro no webhook Chatwoot: {e}")
+        raise HTTPException(status_code=500, detail="Erro interno no servidor")
 
 
 @app.get("/mya-disparo/apresentacao")
