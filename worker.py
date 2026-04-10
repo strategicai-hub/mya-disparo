@@ -240,128 +240,100 @@ def process_message(msg_payload):
 
     # --- CHAMADA REAL AO LLM (Gemini) COM FUNCTION CALLING ---
     evento_criado = False
-    MAX_LLM_RETRIES = 3
-    resposta_ai = None
 
-    for attempt in range(1, MAX_LLM_RETRIES + 1):
-        try:
-            model_id = "gemini-2.5-flash"
-            gemini_history = []
+    try:
+        model_id = "gemini-2.5-flash"
+        gemini_history = []
 
-            if len(historico) > 1:
-                for msg in historico[:-1]:
-                    role = "user" if msg["type"] == "human" else "model"
-                    content = msg.get("data", {}).get("content", "")
-                    if content:
-                        gemini_history.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
+        if len(historico) > 1:
+            for msg in historico[:-1]:
+                role = "user" if msg["type"] == "human" else "model"
+                content = msg.get("data", {}).get("content", "")
+                if content:
+                    gemini_history.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
 
-            chat = client.chats.create(
-                model=model_id,
-                config=types.GenerateContentConfig(
-                    system_instruction=prompt_completo,
-                    tools=[CALENDAR_TOOLS],
-                ),
-                history=gemini_history
-            )
-
-            response = chat.send_message(text_message)
-
-            # --- LOOP DE FUNCTION CALLING ---
-            max_tool_rounds = 8
-            tool_round = 0
-
-            while tool_round < max_tool_rounds:
-                # Verifica se a resposta contém function calls
-                function_calls = []
-                if response.candidates and response.candidates[0].content:
-                    for part in response.candidates[0].content.parts:
-                        if part.function_call:
-                            function_calls.append(part.function_call)
-
-                if not function_calls:
-                    break  # Sem function calls — resposta final de texto
-
-                tool_round += 1
-                log(f"[TOOL CALL] Round {tool_round}: {[fc.name for fc in function_calls]}")
-
-                # Executa cada function call e monta as respostas
-                function_responses = []
-                for fc in function_calls:
-                    fn_name = fc.name
-                    fn_args = dict(fc.args) if fc.args else {}
-                    log(f"[TOOL] Executando {fn_name}({fn_args})")
-
-                    if fn_name == "lead_agendou":
-                        # Notifica equipe via WhatsApp
-                        from tools.send_whatsapp import send_message as sms_raw
-                        alerta = (
-                            f"📅 *LEAD AGENDOU REUNIÃO* 📅\n"
-                            f"Nome: {fn_args.get('nome', '?')}\n"
-                            f"Telefone: {fn_args.get('telefone', '?')}\n"
-                            f"Dia/Horário: {fn_args.get('dia_horario', '?')}"
-                        )
-                        sms_raw("5511989887525@s.whatsapp.net", alerta)
-                        result = {"success": True, "message": "Equipe notificada"}
-                    elif fn_name == "reuniao_agendada":
-                        # Cancela follow-ups
-                        from tools.manage_followups import cancel_followups
-                        cancel_followups(fn_args.get("telefone", phone_number))
-                        result = {"success": True, "message": "Follow-ups cancelados"}
-                        evento_criado = True
-                    else:
-                        dispatch = TOOL_DISPATCH.get(fn_name)
-                        if dispatch:
-                            result = dispatch(fn_args)
-                            # Salva event_id no CRM após agendamento bem-sucedido
-                            if fn_name == "criar_evento" and result.get("event_id"):
-                                save_lead_info(phone_number, {"event_id": result["event_id"]})
-                            # Limpa event_id do CRM após cancelamento
-                            if fn_name == "deleta_evento" and result.get("success"):
-                                save_lead_info(phone_number, {"event_id": ""})
-                        else:
-                            result = {"error": f"Tool '{fn_name}' não encontrada"}
-
-                    log(f"[TOOL] Resultado de {fn_name}: {json.dumps(result, ensure_ascii=False)[:200]}")
-                    function_responses.append(
-                        types.Part(function_response=types.FunctionResponse(
-                            name=fn_name,
-                            response=result
-                        ))
-                    )
-
-                # Envia os resultados de volta ao modelo
-                response = chat.send_message(function_responses)
-
-            # Extrai a resposta final de texto
-            resposta_ai = response.text or ""
-
-            # Log de uso de tokens
-            if response.usage_metadata:
-                input_tokens = response.usage_metadata.prompt_token_count
-                output_tokens = response.usage_metadata.candidates_token_count
-                total_tokens = input_tokens + output_tokens
-                log(f"[TOKENS] Entrada: {input_tokens} | Saída: {output_tokens} | Total: {total_tokens}")
-
-            break  # Sucesso — sai do loop de retry
-
-        except Exception as e:
-            is_503 = "503" in str(e)
-            if is_503 and attempt < MAX_LLM_RETRIES:
-                log(f"[LLM] Erro 503 (alta demanda). Tentativa {attempt}/{MAX_LLM_RETRIES}. Aguardando 5s...")
-                time.sleep(5)
-            else:
-                log(f"Erro ao chamar o LLM (tentativa {attempt}/{MAX_LLM_RETRIES}): {e}")
-                import traceback
-                traceback.print_exc()
-                break
-
-    if resposta_ai is None:
-        from tools.send_whatsapp import send_message as sms_raw
-        sms_raw(
-            "5511989887525@s.whatsapp.net",
-            f"🚨 *MYA LLM INDISPONÍVEL* 🚨\nLead: {push_name} ({phone_number})\nMsg: {text_message[:100]}\n({MAX_LLM_RETRIES} tentativas falharam)"
+        chat = client.chats.create(
+            model=model_id,
+            config=types.GenerateContentConfig(
+                system_instruction=prompt_completo,
+                tools=[CALENDAR_TOOLS],
+            ),
+            history=gemini_history
         )
-        resposta_ai = "Oi! Estou com uma instabilidade técnica agora, mas já avisei a equipe. Em breve alguém entra em contato pra te ajudar!"
+
+        response = chat.send_message(text_message)
+
+        # --- LOOP DE FUNCTION CALLING ---
+        max_tool_rounds = 8
+        tool_round = 0
+
+        while tool_round < max_tool_rounds:
+            function_calls = []
+            if response.candidates and response.candidates[0].content:
+                for part in response.candidates[0].content.parts:
+                    if part.function_call:
+                        function_calls.append(part.function_call)
+
+            if not function_calls:
+                break  # Sem function calls — resposta final de texto
+
+            tool_round += 1
+            log(f"[TOOL CALL] Round {tool_round}: {[fc.name for fc in function_calls]}")
+
+            function_responses = []
+            for fc in function_calls:
+                fn_name = fc.name
+                fn_args = dict(fc.args) if fc.args else {}
+                log(f"[TOOL] Executando {fn_name}({fn_args})")
+
+                if fn_name == "lead_agendou":
+                    from tools.send_whatsapp import send_message as sms_raw
+                    alerta = (
+                        f"📅 *LEAD AGENDOU REUNIÃO* 📅\n"
+                        f"Nome: {fn_args.get('nome', '?')}\n"
+                        f"Telefone: {fn_args.get('telefone', '?')}\n"
+                        f"Dia/Horário: {fn_args.get('dia_horario', '?')}"
+                    )
+                    sms_raw("5511989887525@s.whatsapp.net", alerta)
+                    result = {"success": True, "message": "Equipe notificada"}
+                elif fn_name == "reuniao_agendada":
+                    from tools.manage_followups import cancel_followups
+                    cancel_followups(fn_args.get("telefone", phone_number))
+                    result = {"success": True, "message": "Follow-ups cancelados"}
+                    evento_criado = True
+                else:
+                    dispatch = TOOL_DISPATCH.get(fn_name)
+                    if dispatch:
+                        result = dispatch(fn_args)
+                        if fn_name == "criar_evento" and result.get("event_id"):
+                            save_lead_info(phone_number, {"event_id": result["event_id"]})
+                        if fn_name == "deleta_evento" and result.get("success"):
+                            save_lead_info(phone_number, {"event_id": ""})
+                    else:
+                        result = {"error": f"Tool '{fn_name}' não encontrada"}
+
+                log(f"[TOOL] Resultado de {fn_name}: {json.dumps(result, ensure_ascii=False)[:200]}")
+                function_responses.append(
+                    types.Part(function_response=types.FunctionResponse(
+                        name=fn_name,
+                        response=result
+                    ))
+                )
+
+            response = chat.send_message(function_responses)
+
+        resposta_ai = response.text or ""
+
+        if response.usage_metadata:
+            input_tokens = response.usage_metadata.prompt_token_count
+            output_tokens = response.usage_metadata.candidates_token_count
+            total_tokens = input_tokens + output_tokens
+            log(f"[TOKENS] Entrada: {input_tokens} | Saída: {output_tokens} | Total: {total_tokens}")
+
+    except Exception as e:
+        log(f"[LLM] Erro: {e}. Mensagem retornada à fila.")
+        _save_session_log(phone_number)
+        raise  # Propaga para o callback fazer nack → requeue
     # ------------------------------------------------------------------------------------------
 
     # 0. Checa MENSAGEM AUTOMATICA (ignora auto-replies detectados pelo LLM)
