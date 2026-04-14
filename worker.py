@@ -236,7 +236,6 @@ def process_message(msg_payload):
 
     # HISTÓRICO CONTEXTUAL PARA O LLM
     historico = get_history(phone_number)
-    log(f"Chamando o Agente (LLM) com workflow SDR_MYA para responder a: {text_message}")
 
     # --- CHAMADA REAL AO LLM (Gemini) COM FUNCTION CALLING ---
     evento_criado = False
@@ -278,13 +277,13 @@ def process_message(msg_payload):
                 break  # Sem function calls — resposta final de texto
 
             tool_round += 1
-            log(f"[TOOL CALL] Round {tool_round}: {[fc.name for fc in function_calls]}")
+            log(f"[TOOL GEMINI] Round {tool_round}: chamadas {[fc.name for fc in function_calls]}")
 
             function_responses = []
             for fc in function_calls:
                 fn_name = fc.name
                 fn_args = dict(fc.args) if fc.args else {}
-                log(f"[TOOL] Executando {fn_name}({fn_args})")
+                log(f"[TOOL {fn_name.upper()}] Executando({fn_args})")
 
                 if fn_name == "lead_agendou":
                     from tools.send_whatsapp import send_message as sms_raw
@@ -312,7 +311,8 @@ def process_message(msg_payload):
                     else:
                         result = {"error": f"Tool '{fn_name}' não encontrada"}
 
-                log(f"[TOOL] Resultado de {fn_name}: {json.dumps(result, ensure_ascii=False)[:200]}")
+                _status = "SUCESSO" if (isinstance(result, dict) and (result.get("success") or result.get("event_id") or result.get("slots_disponiveis") is not None or result.get("bookedSlots") is not None)) else ("FALHA" if isinstance(result, dict) and (result.get("error") or result.get("success") is False) else "OK")
+                log(f"[TOOL {fn_name.upper()}] Resultado: {_status} - {json.dumps(result, ensure_ascii=False)[:250]}")
                 function_responses.append(
                     types.Part(function_response=types.FunctionResponse(
                         name=fn_name,
@@ -355,7 +355,7 @@ def process_message(msg_payload):
         nome_lead = match.group(1).strip()
         save_lead_info(phone_number, {"nome": nome_lead, "whatsapp": phone_number})
         nome_conhecido = nome_lead  # Atualiza local para schedule_followups usar o valor correto
-        log(f"[CRM] Nome salvo via tag: {nome_lead}")
+        log(f"[LEAD] Nome salvo via tag: {nome_lead}")
         resposta_ai = re.sub(r'<SAVE_NAME>.*?</SAVE_NAME>', '', resposta_ai, flags=re.IGNORECASE).strip()
     elif not nome_conhecido:
         # Fallback 1: detecta 'Muito prazer, X!' — sem IGNORECASE para exigir inicial maiúscula (evita capturar verbos como "ajudar")
@@ -364,7 +364,7 @@ def process_message(msg_payload):
             nome_lead = fallback_texto.group(1).strip()
             save_lead_info(phone_number, {"nome": nome_lead, "whatsapp": phone_number})
             nome_conhecido = nome_lead  # Atualiza local
-            log(f"[CRM] Nome salvo via fallback texto: {nome_lead}")
+            log(f"[LEAD] Nome salvo via fallback texto: {nome_lead}")
         else:
             # Fallback 2: se a IA mandou saudação de nome, a mensagem ANTERIOR do humano era o nome
             saudacao_nome = re.search(r'(?:muito prazer|que nome bonito|que nome lindo|boa tarde|bom dia|boa noite),?\s', resposta_ai, re.IGNORECASE)
@@ -377,7 +377,7 @@ def process_message(msg_payload):
                     if ultima_humana and len(ultima_humana.split()) <= 3 and re.match(r'^[A-Za-zÀ-ÿ\s]+$', ultima_humana):
                         save_lead_info(phone_number, {"nome": ultima_humana.title(), "whatsapp": phone_number})
                         nome_conhecido = ultima_humana.title()  # Atualiza local
-                        log(f"[CRM] Nome salvo via histórico: {ultima_humana.title()}")
+                        log(f"[LEAD] Nome salvo via histórico: {ultima_humana.title()}")
 
     # 2a. Checa NICHO (via tag <SAVE_NICHO> — apenas 2-3 palavras do negócio)
     match_nicho = re.search(r'<SAVE_NICHO>(.*?)</SAVE_NICHO>', resposta_ai, re.IGNORECASE)
@@ -385,7 +385,7 @@ def process_message(msg_payload):
         nicho_tag = match_nicho.group(1).strip()
         save_lead_info(phone_number, {"nicho": nicho_tag})
         resposta_ai = re.sub(r'<SAVE_NICHO>.*?</SAVE_NICHO>', '', resposta_ai, flags=re.IGNORECASE).strip()
-        log(f"[CRM] Nicho salvo via tag: {nicho_tag}")
+        log(f"[LEAD] Nicho salvo via tag: {nicho_tag}")
         nicho_conhecido = nicho_tag
     elif '[PDF_APRESENTACAO]' in resposta_ai and not nicho_conhecido:
         # Fallback: quando a IA dispara o PDF, a última mensagem humana era o nicho
@@ -394,7 +394,7 @@ def process_message(msg_payload):
             nicho_detectado = msgs_humanas[-1].get("data", {}).get("content", "").strip()
             if nicho_detectado:
                 save_lead_info(phone_number, {"nicho": nicho_detectado})
-                log(f"[CRM] Nicho salvo via histórico (fallback PDF): {nicho_detectado}")
+                log(f"[LEAD] Nicho salvo via histórico (fallback PDF): {nicho_detectado}")
                 nicho_conhecido = nicho_detectado  # Atualiza para usar no Sheets abaixo
 
     # 2b. Checa RESUMO (via tag <SAVE_RESUMO> — atualiza após toda troca de mensagem)
@@ -404,10 +404,10 @@ def process_message(msg_payload):
         resumo_texto = match_resumo.group(1).strip()
         save_lead_info(phone_number, {"resumo": resumo_texto})
         resposta_ai = re.sub(r'<SAVE_RESUMO>.*?</SAVE_RESUMO>', '', resposta_ai, flags=re.IGNORECASE).strip()
-        log(f"[CRM] Resumo atualizado: {resumo_texto}")
+        log(f"[LEAD] Resumo atualizado: {resumo_texto}")
 
     # Salva/atualiza na planilha Google Sheets a cada mensagem (upsert por telefone)
-    log(f"[TOOL] Executando save_lead_to_sheet(phone={phone_number})")
+    log(f"[TOOL SHEETS] Executando save_lead_to_sheet(phone={phone_number})")
     try:
         from tools.save_to_sheets import save_lead_to_sheet
         lead_info_atual = get_lead_info(phone_number)
@@ -417,9 +417,9 @@ def process_message(msg_payload):
             niche=lead_info_atual.get("nicho", ""),
             resumo=resumo_texto or lead_info_atual.get("resumo", "")
         )
-        log(f"[TOOL] Resultado de save_lead_to_sheet: sucesso (upsert por telefone)")
+        log(f"[TOOL SHEETS] Resultado: SUCESSO (upsert por telefone)")
     except Exception as e:
-        log(f"[TOOL] Resultado de save_lead_to_sheet: falha (não crítico) - {e}")
+        log(f"[TOOL SHEETS] Resultado: FALHA (não crítico) - {e}")
 
 
     # 2c. Checa LEAD_INTERESSADO (envia lead ao CRM Básico — 1x por telefone)
@@ -427,43 +427,46 @@ def process_message(msg_payload):
     if match_interesse:
         resposta_ai = re.sub(r'<LEAD_INTERESSADO\s*/?>', '', resposta_ai, flags=re.IGNORECASE).strip()
         crm_args = {"phone": phone_number, "name": nome_conhecido or push_name, "company": push_name}
-        log(f"[TOOL] Executando send_lead_to_crm({crm_args})")
+        log(f"[TOOL CRM] Tag <LEAD_INTERESSADO> detectada - Executando send_lead_to_crm({crm_args})")
         try:
             from tools.crm_api import send_lead_to_crm
             resultado_crm = send_lead_to_crm(**crm_args)
             if resultado_crm.get("success"):
-                log(f"[TOOL] Resultado de send_lead_to_crm: SUCESSO (status {resultado_crm.get('status')}) - lead enviado ao CRM Básico")
+                log(f"[TOOL CRM] Resultado: SUCESSO (status {resultado_crm.get('status')}) - lead enviado ao CRM Básico")
             elif resultado_crm.get("skipped"):
-                log(f"[TOOL] Resultado de send_lead_to_crm: IGNORADO - lead {phone_number} já havia sido enviado anteriormente")
+                log(f"[TOOL CRM] Resultado: IGNORADO - lead {phone_number} já havia sido enviado anteriormente")
             else:
-                log(f"[TOOL] Resultado de send_lead_to_crm: FALHA - {json.dumps(resultado_crm, ensure_ascii=False)[:300]}")
+                log(f"[TOOL CRM] Resultado: FALHA - {json.dumps(resultado_crm, ensure_ascii=False)[:300]}")
         except Exception as e:
-            log(f"[TOOL] Resultado de send_lead_to_crm: EXCEÇÃO - {e}")
+            log(f"[TOOL CRM] Resultado: EXCEÇÃO - {e}")
+    else:
+        log(f"[TOOL CRM] Tag <LEAD_INTERESSADO> não emitida pela IA - CRM não acionado nesta mensagem")
 
     # 3. Checa SEM_INTERESSE (lead recusou definitivamente → cancela follow-ups)
     match_sem_interesse = re.search(r'<SEM_INTERESSE\s*/?>', resposta_ai, re.IGNORECASE)
     sem_interesse = False
     if match_sem_interesse:
+        log(f"[TOOL FOLLOWUP] Executando cancel_followups(telefone={phone_number}) [origem: SEM_INTERESSE]")
         from tools.manage_followups import cancel_followups as cancel_fu_si
         cancel_fu_si(phone_number)
         sem_interesse = True
         resposta_ai = re.sub(r'<SEM_INTERESSE\s*/?>', '', resposta_ai, flags=re.IGNORECASE).strip()
-        log(f"[FOLLOWUP] Lead {phone_number} sem interesse — follow-ups cancelados")
+        log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - lead {phone_number} sem interesse, follow-ups cancelados")
 
     # 4. Checa ALARME DE EQUIPE (Atendimento Humano)
     match_humano = re.search(r'<ATENDIMENTO_HUMANO>(.*?)</ATENDIMENTO_HUMANO>', resposta_ai, re.IGNORECASE)
     if match_humano:
         motivo = match_humano.group(1).strip()
-        log(f"[TOOL] Executando alerta_atendimento_humano(motivo={motivo})")
+        log(f"[TOOL ALERTA_EQUIPE] Executando(motivo={motivo})")
         from tools.send_whatsapp import send_message as sms_raw
         ok_alerta = sms_raw("5511989887525@s.whatsapp.net", f"🚨 *MYA DISPARO LEAD ALERTA* 🚨\nLead: {push_name} ({phone_number})\nMotivo: {motivo}")
-        log(f"[TOOL] Resultado de alerta_atendimento_humano: {'SUCESSO - equipe notificada' if ok_alerta else 'FALHA - Uazapi não entregou o alerta'}")
+        log(f"[TOOL ALERTA_EQUIPE] Resultado: {'SUCESSO - equipe notificada' if ok_alerta else 'FALHA - Uazapi não entregou o alerta'}")
         resposta_ai = re.sub(r'<ATENDIMENTO_HUMANO>.*?</ATENDIMENTO_HUMANO>', '', resposta_ai, flags=re.IGNORECASE).strip()
         # Cancela follow-ups se o lead fechou reunião
-        log(f"[TOOL] Executando cancel_followups(telefone={phone_number}) [origem: ATENDIMENTO_HUMANO]")
+        log(f"[TOOL FOLLOWUP] Executando cancel_followups(telefone={phone_number}) [origem: ATENDIMENTO_HUMANO]")
         from tools.manage_followups import cancel_followups as cancel_fu
         cancel_fu(phone_number)
-        log(f"[TOOL] Resultado de cancel_followups: SUCESSO - follow-ups cancelados")
+        log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - follow-ups cancelados")
 
     # 5. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
     save_message(phone_number, "ai", resposta_ai.replace("[PDF_APRESENTACAO]", "").strip())
@@ -478,26 +481,25 @@ def process_message(msg_payload):
                 send_message(f"{phone_number}@s.whatsapp.net", clean_text)
                 time.sleep(2)
 
-            log(f"[TOOL] Executando send_pdf(destino={phone_number}, arquivo=apresentacao_mya.pdf)")
+            log(f"[TOOL PDF] Executando send_pdf(destino={phone_number}, arquivo=apresentacao_mya.pdf)")
             from tools.send_media import send_pdf
             ok_pdf = send_pdf(phone_number + "@s.whatsapp.net", "apresentacao_mya.pdf")
-            log(f"[TOOL] Resultado de send_pdf: {'SUCESSO - PDF entregue via Uazapi' if ok_pdf else 'FALHA - Uazapi não entregou o PDF'}")
+            log(f"[TOOL PDF] Resultado: {'SUCESSO - PDF entregue via Uazapi' if ok_pdf else 'FALHA - Uazapi não entregou o PDF'}")
             time.sleep(4) # Tempo de respiro de documento
         else:
             sucesso = send_message(f"{phone_number}@s.whatsapp.net", msg_text)
-            if sucesso:
-                log(f"[{indice+1}/{len(mensagens)}] Mensagem fatiada enviada.")
-                if indice < len(mensagens) - 1:
-                    time.sleep(2)
-            else:
-                log("A API da Uazapi falhou no envio. Manter no log.")
+            if not sucesso:
+                log("[TOOL WHATSAPP] Resultado: FALHA - Uazapi não entregou a mensagem")
+            elif indice < len(mensagens) - 1:
+                time.sleep(2)
 
     # 7. AGENDA FOLLOW-UPS após toda resposta enviada (reseta timer se já existiam)
     # Não agenda se: acabou de confirmar reunião via tag OU via function calling (evento_criado) OU lead sem interesse
     if not match_humano and not evento_criado and not sem_interesse:
+        log(f"[TOOL FOLLOWUP] Executando schedule_followups(telefone={phone_number}, nome={nome_conhecido}, nicho={nicho_conhecido})")
         from tools.manage_followups import schedule_followups
         schedule_followups(phone_number, nome=nome_conhecido, nicho=nicho_conhecido)
-        log(f"[FOLLOWUP] Follow-ups agendados/resetados para {phone_number}")
+        log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - follow-ups agendados/resetados para {phone_number}")
 
     _save_session_log(phone_number)
 
