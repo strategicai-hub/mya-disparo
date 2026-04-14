@@ -407,6 +407,7 @@ def process_message(msg_payload):
         log(f"[CRM] Resumo atualizado: {resumo_texto}")
 
     # Salva/atualiza na planilha Google Sheets a cada mensagem (upsert por telefone)
+    log(f"[TOOL] Executando save_lead_to_sheet(phone={phone_number})")
     try:
         from tools.save_to_sheets import save_lead_to_sheet
         lead_info_atual = get_lead_info(phone_number)
@@ -416,19 +417,28 @@ def process_message(msg_payload):
             niche=lead_info_atual.get("nicho", ""),
             resumo=resumo_texto or lead_info_atual.get("resumo", "")
         )
+        log(f"[TOOL] Resultado de save_lead_to_sheet: sucesso (upsert por telefone)")
     except Exception as e:
-        log(f"[SHEETS] Falha ao salvar na planilha (não crítico): {e}")
+        log(f"[TOOL] Resultado de save_lead_to_sheet: falha (não crítico) - {e}")
 
 
     # 2c. Checa LEAD_INTERESSADO (envia lead ao CRM Básico — 1x por telefone)
     match_interesse = re.search(r'<LEAD_INTERESSADO\s*/?>', resposta_ai, re.IGNORECASE)
     if match_interesse:
         resposta_ai = re.sub(r'<LEAD_INTERESSADO\s*/?>', '', resposta_ai, flags=re.IGNORECASE).strip()
+        crm_args = {"phone": phone_number, "name": nome_conhecido or push_name, "company": push_name}
+        log(f"[TOOL] Executando send_lead_to_crm({crm_args})")
         try:
             from tools.crm_api import send_lead_to_crm
-            send_lead_to_crm(phone=phone_number, name=nome_conhecido or push_name, company=push_name)
+            resultado_crm = send_lead_to_crm(**crm_args)
+            if resultado_crm.get("success"):
+                log(f"[TOOL] Resultado de send_lead_to_crm: SUCESSO (status {resultado_crm.get('status')}) - lead enviado ao CRM Básico")
+            elif resultado_crm.get("skipped"):
+                log(f"[TOOL] Resultado de send_lead_to_crm: IGNORADO - lead {phone_number} já havia sido enviado anteriormente")
+            else:
+                log(f"[TOOL] Resultado de send_lead_to_crm: FALHA - {json.dumps(resultado_crm, ensure_ascii=False)[:300]}")
         except Exception as e:
-            log(f"[CRM-API] Falha ao enviar lead (não crítico): {e}")
+            log(f"[TOOL] Resultado de send_lead_to_crm: EXCEÇÃO - {e}")
 
     # 3. Checa SEM_INTERESSE (lead recusou definitivamente → cancela follow-ups)
     match_sem_interesse = re.search(r'<SEM_INTERESSE\s*/?>', resposta_ai, re.IGNORECASE)
@@ -444,12 +454,16 @@ def process_message(msg_payload):
     match_humano = re.search(r'<ATENDIMENTO_HUMANO>(.*?)</ATENDIMENTO_HUMANO>', resposta_ai, re.IGNORECASE)
     if match_humano:
         motivo = match_humano.group(1).strip()
+        log(f"[TOOL] Executando alerta_atendimento_humano(motivo={motivo})")
         from tools.send_whatsapp import send_message as sms_raw
-        sms_raw("5511989887525@s.whatsapp.net", f"🚨 *MYA DISPARO LEAD ALERTA* 🚨\nLead: {push_name} ({phone_number})\nMotivo: {motivo}")
+        ok_alerta = sms_raw("5511989887525@s.whatsapp.net", f"🚨 *MYA DISPARO LEAD ALERTA* 🚨\nLead: {push_name} ({phone_number})\nMotivo: {motivo}")
+        log(f"[TOOL] Resultado de alerta_atendimento_humano: {'SUCESSO - equipe notificada' if ok_alerta else 'FALHA - Uazapi não entregou o alerta'}")
         resposta_ai = re.sub(r'<ATENDIMENTO_HUMANO>.*?</ATENDIMENTO_HUMANO>', '', resposta_ai, flags=re.IGNORECASE).strip()
         # Cancela follow-ups se o lead fechou reunião
+        log(f"[TOOL] Executando cancel_followups(telefone={phone_number}) [origem: ATENDIMENTO_HUMANO]")
         from tools.manage_followups import cancel_followups as cancel_fu
         cancel_fu(phone_number)
+        log(f"[TOOL] Resultado de cancel_followups: SUCESSO - follow-ups cancelados")
 
     # 5. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
     save_message(phone_number, "ai", resposta_ai.replace("[PDF_APRESENTACAO]", "").strip())
@@ -464,9 +478,10 @@ def process_message(msg_payload):
                 send_message(f"{phone_number}@s.whatsapp.net", clean_text)
                 time.sleep(2)
 
-            log("Mya solicitou envio da apresentação PDF. Disparando...")
+            log(f"[TOOL] Executando send_pdf(destino={phone_number}, arquivo=apresentacao_mya.pdf)")
             from tools.send_media import send_pdf
-            send_pdf(phone_number + "@s.whatsapp.net", "apresentacao_mya.pdf")
+            ok_pdf = send_pdf(phone_number + "@s.whatsapp.net", "apresentacao_mya.pdf")
+            log(f"[TOOL] Resultado de send_pdf: {'SUCESSO - PDF entregue via Uazapi' if ok_pdf else 'FALHA - Uazapi não entregou o PDF'}")
             time.sleep(4) # Tempo de respiro de documento
         else:
             sucesso = send_message(f"{phone_number}@s.whatsapp.net", msg_text)
