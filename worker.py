@@ -420,6 +420,16 @@ def process_message(msg_payload):
         log(f"[SHEETS] Falha ao salvar na planilha (não crítico): {e}")
 
 
+    # 2c. Checa LEAD_INTERESSADO (envia lead ao CRM Básico — 1x por telefone)
+    match_interesse = re.search(r'<LEAD_INTERESSADO\s*/?>', resposta_ai, re.IGNORECASE)
+    if match_interesse:
+        resposta_ai = re.sub(r'<LEAD_INTERESSADO\s*/?>', '', resposta_ai, flags=re.IGNORECASE).strip()
+        try:
+            from tools.crm_api import send_lead_to_crm
+            send_lead_to_crm(phone=phone_number, name=nome_conhecido or push_name, company=push_name)
+        except Exception as e:
+            log(f"[CRM-API] Falha ao enviar lead (não crítico): {e}")
+
     # 3. Checa SEM_INTERESSE (lead recusou definitivamente → cancela follow-ups)
     match_sem_interesse = re.search(r'<SEM_INTERESSE\s*/?>', resposta_ai, re.IGNORECASE)
     sem_interesse = False
