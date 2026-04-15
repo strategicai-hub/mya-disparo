@@ -29,6 +29,7 @@ def send_lead_to_crm(phone: str, name: str, company: str) -> dict:
         "phone": phone,
         "company": company or "",
         "ownerId": CRM_OWNER_ID,
+        "origin": "Disparos",
     }
     headers = {
         "X-Api-Key": CRM_API_KEY,
