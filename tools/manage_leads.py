@@ -54,3 +54,74 @@ def clear_lead_info(phone_number: str):
             print(f"[CRM] ⚠️ Nenhuma chave encontrada para deletar: {key}")
     else:
         print(f"[CRM] ❌ Redis não conectado, não foi possível limpar CRM")
+
+
+# TTL padrão do bloqueio por suspeita de IA: 1 ano (reaproveita a chave ai_blocked
+# ja lida pelo api.py — mesma flag usada por Chatwoot)
+AI_BLOCK_TTL_SECONDS = 60 * 60 * 24 * 365
+
+
+def block_lead_as_ai(phone_number: str, motivo: str) -> bool:
+    """
+    Bloqueia um numero por suspeita de ser IA: marca ai_blocked (1 ano),
+    cancela follow-ups, deleta evento do Calendar (se houver) e avisa a equipe.
+    Nao envia resposta ao lead.
+
+    Retorna True se o bloqueio foi aplicado, False em erro.
+    """
+    if not redis_client:
+        return False
+
+    from tools.manage_followups import cancel_followups
+
+    # 1) Flag ai_blocked reaproveita o bloqueio ja respeitado pelo webhook
+    redis_client.setex(
+        f"{KEY_PREFIX}:ai_blocked:{phone_number}",
+        AI_BLOCK_TTL_SECONDS,
+        f"ia_detectada:{motivo[:180]}",
+    )
+
+    # 2) Follow-ups fora
+    cancel_followups(phone_number)
+
+    # 3) Buffer de rajada limpo (evita disparar task pendente)
+    redis_client.delete(f"{KEY_PREFIX}:burst:{phone_number}")
+    redis_client.delete(f"{KEY_PREFIX}:burst_time:{phone_number}")
+
+    # 4) Evento do Calendar (se havia)
+    lead = get_lead_info(phone_number)
+    event_id = lead.get("event_id", "")
+    nome = lead.get("nome", "")
+    evento_info = ""
+    if event_id:
+        try:
+            from tools.manage_calendar import deleta_evento
+            res = deleta_evento(event_id)
+            if res.get("success"):
+                save_lead_info(phone_number, {"event_id": ""})
+                evento_info = f" Evento {event_id} cancelado."
+                print(f"[AI_BLOCK] Evento {event_id} deletado do Calendar")
+            else:
+                evento_info = f" (falha ao deletar evento {event_id}: {res})"
+                print(f"[AI_BLOCK] Falha ao deletar evento: {res}")
+        except Exception as e:
+            evento_info = f" (erro ao deletar evento: {e})"
+            print(f"[AI_BLOCK] Erro ao deletar evento: {e}")
+
+    # 5) Alerta equipe
+    try:
+        from tools.send_whatsapp import send_message
+        texto = (
+            "🚨 *IA DETECTADA — CONVERSA INTERROMPIDA*\n"
+            f"Número: {phone_number}\n"
+            f"Nome: {nome or '(desconhecido)'}\n"
+            f"Motivo: {motivo}\n"
+            f"Ações: IA bloqueada por 1 ano, follow-ups cancelados.{evento_info}"
+        )
+        send_message("5511989887525@s.whatsapp.net", texto)
+        print(f"[AI_BLOCK] Equipe alertada para {phone_number}")
+    except Exception as e:
+        print(f"[AI_BLOCK] Falha ao alertar equipe: {e}")
+
+    print(f"[AI_BLOCK] Lead {phone_number} bloqueado. Motivo: {motivo}")
+    return True

@@ -195,6 +195,21 @@ def process_message(msg_payload):
         _save_session_log(phone_number)
         return
 
+    # Detecção heurística pré-LLM: padrões óbvios de IA/atendente virtual no input do "lead"
+    try:
+        from tools.ai_detector import detect as detect_ai
+        is_ai, motivo_ai = detect_ai(text_message)
+        if is_ai:
+            log(f"[AI_DETECT] Heurística detectou IA em {phone_number}: {motivo_ai}")
+            save_message(phone_number, "human", text_message)
+            save_message(phone_number, "ai", f"[IA detectada pela heurística: {motivo_ai}]")
+            from tools.manage_leads import block_lead_as_ai
+            block_lead_as_ai(phone_number, f"heurística: {motivo_ai}")
+            _save_session_log(phone_number)
+            return
+    except Exception as e:
+        log(f"[AI_DETECT] Erro na heurística (seguindo fluxo normal): {e}")
+
     # Salva o input no Redis
     save_message(phone_number, "human", text_message)
 
@@ -344,6 +359,17 @@ def process_message(msg_payload):
         save_message(phone_number, "ai", f"[auto-reply ignorada: {motivo_auto}]")
         _save_session_log(phone_number)
         return  # NÃO reseta follow-ups — auto-reply não conta como resposta humana
+
+    # 0b. Checa IA DO OUTRO LADO (Mya identificou que o "lead" é outra IA)
+    match_ia = re.search(r'<IGNORAR_IA>(.*?)</IGNORAR_IA>', resposta_ai, re.IGNORECASE)
+    if match_ia:
+        motivo_ia = match_ia.group(1).strip() or "sinais de IA detectados pelo LLM"
+        log(f"[AI_DETECT] LLM detectou IA em {phone_number}: {motivo_ia}")
+        save_message(phone_number, "ai", f"[IA detectada pelo LLM: {motivo_ia}]")
+        from tools.manage_leads import block_lead_as_ai
+        block_lead_as_ai(phone_number, f"LLM: {motivo_ia}")
+        _save_session_log(phone_number)
+        return  # NÃO responde, NÃO agenda follow-up — conversa encerrada
 
     # Mensagem humana confirmada → reseta timer de follow-ups
     from tools.manage_followups import reset_followup_timer
