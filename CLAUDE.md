@@ -22,7 +22,7 @@ Isso inclui:
 
 O processo de redeploy deste projeto é sempre:
 1. Criar o tarball: `tar -czf /tmp/build-context.tar.gz --exclude='.git' --exclude='node_modules' --exclude='.env' .`
-2. Build via Portainer API (`https://91.98.64.92:9443`, tag `ghcr.io/gustavocastilho-hub/mya-disparo:latest`)
+2. Build via Portainer API (`https://91.98.64.92:9443`, tag `ghcr.io/strategicai-hub/mya-disparo:latest`)
 3. Force-update do serviço Swarm (`mya-disparo_api`, `mya-disparo_worker`, `mya-disparo_scheduler`) com o spec completo incrementando `ForceUpdate`
 4. Verificar HTTP 200 em `https://webhook-whatsapp.strategicai.com.br/mya-disparo/`
 5. Verificar se os containers estão rodando via `docker service ps <SERVICE_ID>` ou Portainer API
@@ -101,7 +101,7 @@ Sempre pergunte antes de:
 - Redis: compartilhado, isolamento via prefixo `disparo:`
 - LLM: Google GenAI (Gemini)
 - WhatsApp: UAZAPI (`https://strategicai.uazapi.com`)
-- CI/CD: GitHub Actions → `ghcr.io/gustavocastilho-hub/mya-disparo:latest`
+- CI/CD: GitHub Actions → `ghcr.io/strategicai-hub/mya-disparo:latest`
 - Após push, redeploy manualmente no Portainer
 
 ---

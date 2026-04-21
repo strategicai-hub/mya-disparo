@@ -27,7 +27,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/gustavocastilho-hub/mya-disparo:latest
+          tags: ghcr.io/strategicai-hub/mya-disparo:latest
 
       - name: Deploy via API Portainer (Git Redeploy)
         env:
@@ -48,7 +48,7 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-API-Key: $PORTAINER_TOKEN" \
             "$PORTAINER_URL/api/stacks/$STACK_ID/git/redeploy?endpointId=$ENDPOINT_ID" \
-            -d "{\"pullImage\": true, \"prune\": false, \"repositoryAuthentication\": true, \"repositoryUsername\": \"gustavocastilho-hub\", \"repositoryPassword\": \"$GITHUB_PAT\", \"env\": $STACK_ENV}")
+            -d "{\"pullImage\": true, \"prune\": false, \"repositoryAuthentication\": true, \"repositoryUsername\": \"strategicai-hub\", \"repositoryPassword\": \"$GITHUB_PAT\", \"env\": $STACK_ENV}")
 
           RESPONSE=$(echo "$BODY" | grep "HTTP_STATUS:" | cut -d: -f2)
           echo "HTTP Status: $RESPONSE"
