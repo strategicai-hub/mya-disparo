@@ -23,39 +23,71 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
           tags: ghcr.io/strategicai-hub/mya-disparo:latest
 
-      - name: Deploy via API Portainer (Git Redeploy)
+      - name: Deploy via Portainer (Force-update Swarm services)
         env:
           PORTAINER_TOKEN: ${{ secrets.PORTAINER_TOKEN }}
-          GITHUB_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          set -e
           PORTAINER_URL="https://91.98.64.92:9443"
-          STACK_ID=48
           ENDPOINT_ID=1
+          IMAGE_REF="ghcr.io/strategicai-hub/mya-disparo:latest@${IMAGE_DIGEST}"
+          SERVICES="mya-disparo_api mya-disparo_worker mya-disparo_scheduler"
 
-          echo "Buscando variáveis de ambiente atuais da stack..."
-          STACK_ENV=$(curl -k -s \
-            -H "X-API-Key: $PORTAINER_TOKEN" \
-            "$PORTAINER_URL/api/stacks/$STACK_ID" | jq '.Env // []')
+          echo "Imagem alvo: $IMAGE_REF"
+          echo "Listando serviços no endpoint $ENDPOINT_ID..."
+          ALL_SVCS=$(curl -k -s -H "X-API-Key: $PORTAINER_TOKEN" \
+            "$PORTAINER_URL/api/endpoints/$ENDPOINT_ID/docker/services")
 
-          echo "Disparando git redeploy no Portainer (mantém modo Repository)..."
-          BODY=$(curl -k -s -w "\nHTTP_STATUS:%{http_code}" -X PUT \
-            -H "Content-Type: application/json" \
-            -H "X-API-Key: $PORTAINER_TOKEN" \
-            "$PORTAINER_URL/api/stacks/$STACK_ID/git/redeploy?endpointId=$ENDPOINT_ID" \
-            -d "{\"pullImage\": true, \"prune\": false, \"repositoryAuthentication\": true, \"repositoryUsername\": \"strategicai-hub\", \"repositoryPassword\": \"$GITHUB_PAT\", \"env\": $STACK_ENV}")
+          FAIL=0
+          for SVC_NAME in $SERVICES; do
+            SVC_ID=$(echo "$ALL_SVCS" | jq -r --arg n "$SVC_NAME" '.[] | select(.Spec.Name == $n) | .ID')
+            if [ -z "$SVC_ID" ]; then
+              echo "::error::Serviço $SVC_NAME não encontrado"
+              FAIL=1
+              continue
+            fi
+            echo "---"
+            echo "Atualizando $SVC_NAME (ID: ${SVC_ID:0:12})..."
 
-          RESPONSE=$(echo "$BODY" | grep "HTTP_STATUS:" | cut -d: -f2)
-          echo "HTTP Status: $RESPONSE"
-          echo "Response body: $(echo "$BODY" | grep -v HTTP_STATUS:)"
-          if [ "$RESPONSE" = "200" ]; then
-            echo "Portainer redeploy com sucesso!"
-          else
-            echo "Falha no redeploy. HTTP $RESPONSE"
+            SVC=$(curl -k -s -H "X-API-Key: $PORTAINER_TOKEN" \
+              "$PORTAINER_URL/api/endpoints/$ENDPOINT_ID/docker/services/$SVC_ID")
+            VERSION=$(echo "$SVC" | jq -r '.Version.Index')
+            NOW_NS=$(date +%s%N)
+
+            # Sobrescreve Image pelo digest novo e incrementa ForceUpdate (nanoseconds)
+            SPEC=$(echo "$SVC" | jq \
+              --arg img "$IMAGE_REF" \
+              --argjson fu "$NOW_NS" \
+              '.Spec
+                | .TaskTemplate.ForceUpdate = $fu
+                | .TaskTemplate.ContainerSpec.Image = $img')
+
+            HTTP_CODE=$(echo "$SPEC" | curl -k -s -o /tmp/resp.json -w "%{http_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $PORTAINER_TOKEN" \
+              --data-binary @- \
+              "$PORTAINER_URL/api/endpoints/$ENDPOINT_ID/docker/services/$SVC_ID/update?version=$VERSION")
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "  OK - $SVC_NAME atualizado"
+            else
+              echo "::error::Falha $SVC_NAME HTTP $HTTP_CODE"
+              cat /tmp/resp.json
+              echo
+              FAIL=1
+            fi
+          done
+
+          if [ "$FAIL" = "1" ]; then
             exit 1
           fi
+          echo "Deploy OK em todos os serviços"
