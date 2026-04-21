@@ -1,5 +1,6 @@
 # Configurações sensíveis e chaves
 .env
+stack.env
 
 # Credenciais Google Service Account (NUNCA commit!)
 *.json

@@ -51,17 +51,17 @@ def get_service_spec(service_id):
     return api_get(f"/api/endpoints/{ENDPOINT_ID}/docker/services/{service_id}")
 
 def update_service(service_id, spec, version):
-    """Força atualização de um serviço (incrementa ForceUpdate + remove digest para pull nova :latest)"""
+    """Força atualização de um serviço (incrementa ForceUpdate + sobrescreve Image para forçar repull)"""
     # Incrementa o ForceUpdate timestamp para forçar recriação
     spec["Spec"]["TaskTemplate"]["ForceUpdate"] = int(time.time() * 1e9)  # nanoseconds
 
-    # Remove o digest @sha256:... para forçar pull da nova :latest
+    # SEMPRE sobrescreve o Image pela IMAGE canônica (sem sha256), garantindo
+    # que Swarm resolva :latest fresco e que refs antigas (org/repo antigos) sejam substituídas.
     container_spec = spec["Spec"]["TaskTemplate"]["ContainerSpec"]
-    img = container_spec.get("Image", "")
-    if "@sha256:" in img:
-        img_clean = img.split("@sha256:")[0]
-        container_spec["Image"] = img_clean
-        print(f"  Imagem limpa (sem digest): {img_clean}")
+    img_antigo = container_spec.get("Image", "")
+    container_spec["Image"] = IMAGE
+    if img_antigo != IMAGE:
+        print(f"  Image sobrescrito: {img_antigo} -> {IMAGE}")
 
     path = f"/api/endpoints/{ENDPOINT_ID}/docker/services/{service_id}/update?version={version}"
     print(f"  Enviando spec atualizado (version={version})...")

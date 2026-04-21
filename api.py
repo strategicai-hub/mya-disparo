@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+from config.instances import redis_prefix, valid_instance, OWNER_NUMBER
+
 load_dotenv()
 
 app = FastAPI(title="Mya Disparo Bot Webhook")
@@ -28,20 +30,18 @@ RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 RABBITMQ_QUEUE = "mya_disparo"
 
-# Prefixo para isolar dados no Redis compartilhado
-KEY_PREFIX = "disparo"
-
-# Configuração do Redis para Buffer Antirrajadas (mesmo DB, prefixo nas chaves)
+# Configuração do Redis para Buffer Antirrajadas (prefixo por instância)
 _REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 try:
     redis_client = redis.Redis.from_url(_REDIS_URL, decode_responses=True)
-    redis_client.ping()  # Valida conexão imediatamente
+    redis_client.ping()
 except Exception as e:
     print(f"Erro ao conectar ao Redis para Buffer: {e}")
     redis_client = None
 
 background_tasks = set()
+
 
 def get_rabbitmq_channel():
     """Conecta ao RabbitMQ e retorna um canal."""
@@ -59,59 +59,61 @@ def get_rabbitmq_channel():
         print(f"Erro ao conectar ao RabbitMQ: {e}")
         return None, None
 
-def publish_to_rabbitmq(payload):
-    """Envia o payload consolidado para o RabbitMQ."""
+
+def publish_to_rabbitmq(payload, instance_id):
+    """Envia o payload consolidado para o RabbitMQ, carimbando o instance_id."""
+    payload["_instance_id"] = str(instance_id)
     connection, channel = get_rabbitmq_channel()
     if channel:
         channel.basic_publish(
             exchange='',
             routing_key=RABBITMQ_QUEUE,
             body=json.dumps(payload),
-            properties=pika.BasicProperties(delivery_mode=2) # Persistente
+            properties=pika.BasicProperties(delivery_mode=2)  # Persistente
         )
         connection.close()
-        print(">>> Mensagem (ou Rajada Agrupada) enfileirada com sucesso no RabbitMQ")
+        print(f">>> Mensagem enfileirada com sucesso no RabbitMQ [inst {instance_id}]")
     else:
         print("Erro Crítico: Sem conexão com RabbitMQ!")
 
-async def debounce_and_publish(phone_number: str, payload_base: dict):
+
+async def debounce_and_publish(phone_number: str, payload_base: dict, instance_id: str):
     """Aguarda 30 segundos observando se o Lead digitou novamente. Se sim, ele morre. Se não, dispara."""
     await asyncio.sleep(30)
 
     if not redis_client:
-        publish_to_rabbitmq(payload_base)
+        publish_to_rabbitmq(payload_base, instance_id)
         return
 
-    last_time = float(redis_client.get(f"{KEY_PREFIX}:burst_time:{phone_number}") or 0)
+    prefix = redis_prefix(instance_id)
+    last_time = float(redis_client.get(f"{prefix}:burst_time:{phone_number}") or 0)
 
-    # Verifica se esta task é a dona da ÚLTIMA mensagem enviada (gap de 29s+)
     if time.time() - last_time >= 29:
-        messages = redis_client.lrange(f"{KEY_PREFIX}:burst:{phone_number}", 0, -1)
+        messages = redis_client.lrange(f"{prefix}:burst:{phone_number}", 0, -1)
         if not messages:
-            return # Task morta (já limparam a fila)
+            return
 
         full_text = "\n".join(messages)
-        redis_client.delete(f"{KEY_PREFIX}:burst:{phone_number}")
-        redis_client.delete(f"{KEY_PREFIX}:burst_time:{phone_number}")
+        redis_client.delete(f"{prefix}:burst:{phone_number}")
+        redis_client.delete(f"{prefix}:burst_time:{phone_number}")
 
-        # Injeta o texto compilado no payload e envia
         payload_base["message"]["text"] = full_text
-        print(f"\n[DEBOUNCER] Agrupou {len(messages)} mensagens do Lead {phone_number} num único bloco. Enviando...")
-        publish_to_rabbitmq(payload_base)
+        print(f"\n[DEBOUNCER] Agrupou {len(messages)} mensagens do Lead {phone_number} [inst {instance_id}]. Enviando...")
+        publish_to_rabbitmq(payload_base, instance_id)
 
 
-@app.post("/mya-disparo")
-async def receive_whatsapp_webhook(request: Request):
-    """
-    Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas.
-    """
+async def _handle_webhook(instance_id: str, request: Request):
+    """Lógica compartilhada para recebimento de webhook da UAZAPI por instância."""
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
+
     try:
         payload = await request.json()
-
         event_name = payload.get("EventType")
 
         if event_name == "messages":
             msg = payload.get("message", {})
+            prefix = redis_prefix(instance_id)
 
             # Mensagem de prospecção enviada pelo n8n → salva histórico e agenda follow-ups
             if msg.get("fromMe") and msg.get("track_source") == "n8n":
@@ -122,90 +124,95 @@ async def receive_whatsapp_webhook(request: Request):
                     if texto_disparo:
                         try:
                             from tools.manage_history import save_message
-                            save_message(lead_phone, "ai", texto_disparo)
-                            print(f"[DISPARO] Mensagem salva no histórico de {lead_phone}")
+                            save_message(lead_phone, "ai", texto_disparo, instance_id)
+                            print(f"[DISPARO] Mensagem salva no histórico de {lead_phone} [inst {instance_id}]")
                         except Exception as e:
                             print(f"[DISPARO] Erro ao salvar no histórico: {e}")
                     try:
                         from tools.manage_followups import schedule_followups
-                        schedule_followups(lead_phone)
-                        print(f"[DISPARO] Follow-ups agendados para {lead_phone}")
+                        schedule_followups(lead_phone, instance_id)
+                        print(f"[DISPARO] Follow-ups agendados para {lead_phone} [inst {instance_id}]")
                     except Exception as e:
                         print(f"[DISPARO] Erro ao agendar follow-ups: {e}")
                 return {"status": "success", "message": "Disparo n8n registrado"}
 
             # Mensagem enviada manualmente (Chatwoot/WhatsApp direto) → bloqueia IA por 1h
-            # Ignora mensagens da própria Mya (track_source="mya_bot") e do n8n
             if msg.get("fromMe"):
                 track = msg.get("track_source", "")
                 if track not in ("n8n", "IA"):
                     raw_chatid = msg.get("chatid", "")
                     lead_phone = raw_chatid.split("@")[0]
                     if lead_phone and redis_client:
-                        redis_client.setex(f"{KEY_PREFIX}:ai_blocked:{lead_phone}", 3600, "manual")
-                        print(f"[CHATWOOT] Mensagem manual para {lead_phone}. IA bloqueada por 1h.")
+                        redis_client.setex(f"{prefix}:ai_blocked:{lead_phone}", 3600, "manual")
+                        print(f"[CHATWOOT] Mensagem manual para {lead_phone} [inst {instance_id}]. IA bloqueada por 1h.")
                 return {"status": "success", "message": "Mensagem manual registrada"}
 
             # Mensagem recebida do lead
             if not msg.get("fromMe", True):
-
                 raw_sender = msg.get("sender_pn") or msg.get("chatid") or msg.get("sender", "")
                 phone_number = raw_sender.split("@")[0]
                 text = msg.get("text", "")
 
-                print(f"=== MENSAGEM RECEBIDA [{phone_number}] ===\nTexto: '{text}'\n============================")
+                print(f"=== MENSAGEM RECEBIDA [inst {instance_id}][{phone_number}] ===\nTexto: '{text}'\n============================")
 
-                # Verifica se IA está bloqueada (agente respondendo pelo Chatwoot)
-                if redis_client and redis_client.exists(f"{KEY_PREFIX}:ai_blocked:{phone_number}"):
-                    print(f"[CHATWOOT] IA bloqueada para {phone_number}. Ignorando mensagem do lead.")
+                if redis_client and redis_client.exists(f"{prefix}:ai_blocked:{phone_number}"):
+                    print(f"[CHATWOOT] IA bloqueada para {phone_number} [inst {instance_id}]. Ignorando mensagem do lead.")
                     return {"status": "success", "message": "IA bloqueada — Chatwoot ativo"}
 
                 # Bypass do debounce para o numero do proprietario (testes rapidos)
-                OWNER_NUMBER = "5511989887525"
                 if phone_number == OWNER_NUMBER:
-                    print(f"-> Numero do proprietario detectado. Enviando direto sem delay...")
-                    publish_to_rabbitmq(payload)
+                    print(f"-> Numero do proprietario detectado. Enviando direto sem delay [inst {instance_id}]...")
+                    publish_to_rabbitmq(payload, instance_id)
                 elif redis_client:
-                    # Empilha a mensagem na rajada
-                    redis_client.rpush(f"{KEY_PREFIX}:burst:{phone_number}", text)
-                    redis_client.set(f"{KEY_PREFIX}:burst_time:{phone_number}", time.time())
+                    redis_client.rpush(f"{prefix}:burst:{phone_number}", text)
+                    redis_client.set(f"{prefix}:burst_time:{phone_number}", time.time())
 
-                    # Inicia a contagem regressiva assíncrona invisível
-                    task = asyncio.create_task(debounce_and_publish(phone_number, payload))
+                    task = asyncio.create_task(debounce_and_publish(phone_number, payload, instance_id))
                     background_tasks.add(task)
                     task.add_done_callback(background_tasks.discard)
-                    print(f"-> Acionou Delay de 30s para o Lead {phone_number}...")
+                    print(f"-> Acionou Delay de 30s para o Lead {phone_number} [inst {instance_id}]...")
                 else:
-                    # Fallback caso Redis morra, manda direto
-                    publish_to_rabbitmq(payload)
+                    publish_to_rabbitmq(payload, instance_id)
 
         return {"status": "success", "message": "Webhook recebido"}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Erro no webhook: {e}")
+        print(f"Erro no webhook [inst {instance_id}]: {e}")
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
 
-@app.get("/mya-disparo/logs/leads")
-async def logs_leads():
-    """Retorna todos os leads com dados de CRM."""
+
+@app.post("/mya-disparo-{instance_id}")
+async def receive_whatsapp_webhook(instance_id: str, request: Request):
+    """Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas (roteado por instância)."""
+    return await _handle_webhook(instance_id, request)
+
+
+@app.get("/mya-disparo-{instance_id}/logs/leads")
+async def logs_leads(instance_id: str):
+    """Retorna todos os leads da instância com dados de CRM."""
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis indisponível")
 
-    lead_keys = redis_client.keys(f"{KEY_PREFIX}:lead:*")
-    history_keys = redis_client.keys(f"{KEY_PREFIX}:history:*")
+    prefix = redis_prefix(instance_id)
+    lead_keys = redis_client.keys(f"{prefix}:lead:*")
+    history_keys = redis_client.keys(f"{prefix}:history:*")
 
     phones = set()
     for k in lead_keys:
-        phones.add(k.replace(f"{KEY_PREFIX}:lead:", ""))
+        phones.add(k.replace(f"{prefix}:lead:", ""))
     for k in history_keys:
-        phones.add(k.replace(f"{KEY_PREFIX}:history:", ""))
+        phones.add(k.replace(f"{prefix}:history:", ""))
 
     leads = []
     for phone in sorted(phones):
-        crm_raw = redis_client.get(f"{KEY_PREFIX}:lead:{phone}")
+        crm_raw = redis_client.get(f"{prefix}:lead:{phone}")
         crm = json.loads(crm_raw) if crm_raw else {}
-        msg_count = redis_client.llen(f"{KEY_PREFIX}:history:{phone}")
-        has_followup = redis_client.exists(f"{KEY_PREFIX}:followup:active:{phone}") == 1
+        msg_count = redis_client.llen(f"{prefix}:history:{phone}")
+        has_followup = redis_client.exists(f"{prefix}:followup:active:{phone}") == 1
         leads.append({
             "phone": phone,
             "nome": crm.get("nome", ""),
@@ -220,13 +227,15 @@ async def logs_leads():
     return leads
 
 
-@app.get("/mya-disparo/logs/history/{phone}")
-async def logs_history(phone: str):
-    """Retorna o histórico completo de um lead."""
+@app.get("/mya-disparo-{instance_id}/logs/history/{phone}")
+async def logs_history(instance_id: str, phone: str):
+    """Retorna o histórico completo de um lead em uma instância."""
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis indisponível")
 
-    raw = redis_client.lrange(f"{KEY_PREFIX}:history:{phone}", 0, -1)
+    raw = redis_client.lrange(f"{redis_prefix(instance_id)}:history:{phone}", 0, -1)
     messages = []
     for item in raw:
         try:
@@ -240,12 +249,14 @@ async def logs_history(phone: str):
     return messages
 
 
-@app.get("/mya-disparo/logs/events")
-async def logs_events(limit: int = 100):
-    """Retorna os últimos eventos de execução do worker (logs por sessão)."""
+@app.get("/mya-disparo-{instance_id}/logs/events")
+async def logs_events(instance_id: str, limit: int = 100):
+    """Retorna os últimos eventos de execução do worker (logs por sessão) da instância."""
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis indisponível")
-    raw = redis_client.lrange(f"{KEY_PREFIX}:logs", 0, limit - 1)
+    raw = redis_client.lrange(f"{redis_prefix(instance_id)}:logs", 0, limit - 1)
     events = []
     for item in raw:
         try:
@@ -255,76 +266,68 @@ async def logs_events(limit: int = 100):
     return events
 
 
-@app.post("/chatwoot-webhook")
-async def receive_chatwoot_webhook(request: Request):
-    """
-    Recebe eventos do Chatwoot. Quando agente envia mensagem para um lead,
-    bloqueia a IA por 1 hora para aquele número.
-    """
+@app.post("/chatwoot-webhook-{instance_id}")
+async def receive_chatwoot_webhook(instance_id: str, request: Request):
+    """Recebe eventos do Chatwoot de uma instância; bloqueia a IA por 1h quando o agente responde."""
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
+
     try:
         payload = await request.json()
-        print(f"[CHATWOOT] Webhook recebido: {json.dumps(payload, ensure_ascii=False)[:500]}")
+        print(f"[CHATWOOT inst {instance_id}] Webhook recebido: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
         event = payload.get("event", "")
-
         if event != "message_created":
-            print(f"[CHATWOOT] Evento ignorado: {event}")
+            print(f"[CHATWOOT inst {instance_id}] Evento ignorado: {event}")
             return {"status": "ignored"}
 
-        # message_type: 1 ou "outgoing" = mensagem enviada pelo agente
         msg_type = payload.get("message_type")
         is_outgoing = msg_type == 1 or msg_type == "outgoing"
-        print(f"[CHATWOOT] message_type={msg_type!r}, is_outgoing={is_outgoing}")
+        print(f"[CHATWOOT inst {instance_id}] message_type={msg_type!r}, is_outgoing={is_outgoing}")
 
         if not is_outgoing:
             return {"status": "ignored", "reason": "not outgoing"}
 
-        # Extrai o telefone do lead da conversa
         conversation = payload.get("conversation", {})
         meta = conversation.get("meta", {})
         sender = meta.get("sender", {})
         phone_raw = sender.get("phone_number", "")
-        print(f"[CHATWOOT] phone_raw extraído: {phone_raw!r} | meta.sender: {sender}")
+        print(f"[CHATWOOT inst {instance_id}] phone_raw: {phone_raw!r}")
 
         if not phone_raw:
-            print("[CHATWOOT] ERRO: phone_number não encontrado no payload.")
+            print(f"[CHATWOOT inst {instance_id}] ERRO: phone_number não encontrado no payload.")
             return {"status": "error", "reason": "phone not found"}
 
-        # Normaliza: remove caracteres não numéricos (ex: "+55..." → "55...")
         phone = re.sub(r'\D', '', phone_raw)
-
         if not phone:
             return {"status": "error", "reason": "invalid phone"}
 
-        # Bloqueia a IA por 1 hora para este lead
         if redis_client:
-            redis_client.setex(f"{KEY_PREFIX}:ai_blocked:{phone}", 3600, "chatwoot")
-            print(f"[CHATWOOT] IA bloqueada por 1h para {phone} (agente respondeu via Chatwoot)")
+            redis_client.setex(f"{redis_prefix(instance_id)}:ai_blocked:{phone}", 3600, "chatwoot")
+            print(f"[CHATWOOT inst {instance_id}] IA bloqueada por 1h para {phone}")
 
         return {"status": "success", "phone": phone, "blocked_seconds": 3600}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Erro no webhook Chatwoot: {e}")
+        print(f"Erro no webhook Chatwoot [inst {instance_id}]: {e}")
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
 
 
+# --- Rotas de mídia compartilhadas (consumidas pela UAZAPI como URL pública de download) ---
 @app.get("/mya-disparo/apresentacao")
 async def serve_pdf():
-    """
-    Rota pública que hospeda nativamente o PDF do bot
-    """
+    """Rota pública que hospeda o PDF de apresentação (compartilhado entre instâncias)."""
     file_path = os.path.join(os.getcwd(), "apresentacao_mya.pdf")
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type="application/pdf", filename="Apresentacao_Mya.pdf")
-    else:
-        raise HTTPException(status_code=404, detail="PDF não encontrado no disco do servidor")
+    raise HTTPException(status_code=404, detail="PDF não encontrado no disco do servidor")
+
 
 @app.get("/mya-disparo/resultado")
 async def serve_resultado_image():
-    """
-    Rota pública que hospeda a imagem de resultado para follow-up D+7
-    """
-    # Tenta jpg primeiro, depois png
+    """Rota pública da imagem de resultado para follow-up D+7 (compartilhada entre instâncias)."""
     for ext in ["jpg", "jpeg", "png"]:
         file_path = os.path.join(os.getcwd(), f"resultado_followup.{ext}")
         if os.path.exists(file_path):

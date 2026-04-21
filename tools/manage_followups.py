@@ -6,9 +6,10 @@ import redis
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
+from config.instances import redis_prefix, OWNER_NUMBER, INSTANCES
+
 load_dotenv()
 
-# Usa o mesmo Redis DB, isolamento via prefixo nas chaves
 _REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 try:
@@ -17,17 +18,11 @@ except Exception as e:
     print(f"Erro ao conectar ao Redis para Follow-ups: {e}")
     redis_client = None
 
-OWNER_NUMBER = "5511989887525"
 FOLLOWUP_IMAGE_URL = "https://webhook-whatsapp.strategicai.com.br/mya-disparo/resultado"
-
-# Prefixo para isolar dados deste projeto no Redis compartilhado
-KEY_PREFIX = "disparo"
 
 # Intervalos em segundos
 INTERVALS_NORMAL = [86400, 259200, 604800]    # 1d, 3d, 7d
 INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d
-
-#[60, 120, 180]              # 1min, 2min, 3min (teste)
 
 SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
@@ -41,46 +36,42 @@ def _next_morning_timestamp() -> float:
     return amanha.timestamp()
 
 
-def reset_followup_timer(phone_number: str):
+def reset_followup_timer(phone_number: str, instance_id):
     """Reseta o timer dos follow-ups — cancela os antigos e zera o ciclo (lead respondeu)."""
     if not redis_client:
         return
-    if has_active_followups(phone_number):
-        cancel_followups(phone_number)
-        print(f"[FOLLOWUP] Timer resetado para {phone_number} (lead respondeu)")
+    if has_active_followups(phone_number, instance_id):
+        cancel_followups(phone_number, instance_id)
+        print(f"[FOLLOWUP] Timer resetado para {phone_number} (lead respondeu) [inst {instance_id}]")
 
 
-def reset_followup_cycle(phone_number: str):
+def reset_followup_cycle(phone_number: str, instance_id):
     """Zera o ciclo de follow-up do lead (usado no /reset)."""
     if not redis_client:
         return
-    cancel_followups(phone_number)
-    redis_client.delete(f"{KEY_PREFIX}:followup:cycle:{phone_number}")
-    print(f"[FOLLOWUP] Ciclo zerado para {phone_number}")
+    cancel_followups(phone_number, instance_id)
+    redis_client.delete(f"{redis_prefix(instance_id)}:followup:cycle:{phone_number}")
+    print(f"[FOLLOWUP] Ciclo zerado para {phone_number} [inst {instance_id}]")
 
 
-def _get_followup_cycle(phone_number: str) -> int:
-    """Retorna o ciclo atual de follow-up do lead (0 = primeiro ciclo)."""
+def _get_followup_cycle(phone_number: str, instance_id) -> int:
     if not redis_client:
         return 0
-    cycle = redis_client.get(f"{KEY_PREFIX}:followup:cycle:{phone_number}")
+    cycle = redis_client.get(f"{redis_prefix(instance_id)}:followup:cycle:{phone_number}")
     return int(cycle) if cycle else 0
 
 
-def _advance_followup_cycle(phone_number: str) -> int:
-    """Avança para o próximo ciclo e retorna o novo valor."""
+def _advance_followup_cycle(phone_number: str, instance_id) -> int:
     if not redis_client:
         return 0
-    return redis_client.incr(f"{KEY_PREFIX}:followup:cycle:{phone_number}") - 1
+    return redis_client.incr(f"{redis_prefix(instance_id)}:followup:cycle:{phone_number}") - 1
 
 
 def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: str, cycle: int = 0) -> list:
     """Gera 3 follow-ups variados e contextuais, usando ciclos diferentes a cada rodada."""
     saudacao = f"Oi {nome}, " if nome else "Oi, "
 
-    # Ciclos de mensagens — cada ciclo é uma experiência diferente
     if cycle == 0:
-        # --- CICLO 1: Abordagem inicial ---
         step1_variants = [
             f"{saudacao}imagino que seu dia esteja corrido. Conseguiu dar uma olhada no que te mandei?",
             f"{saudacao}sei que a rotina é puxada. Só passando pra ver se conseguiu ver aquela proposta que te enviei!",
@@ -100,7 +91,6 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
             f"{saudacao}sei que cada um tem seu tempo. Te mando aqui um case pra guardar, e qualquer coisa no futuro estou por aqui!",
             f"Sem problemas! Vou te deixar com esse resultado que tivemos e fico à disposição quando fizer sentido pra você. Sucesso!",
         ]
-        # Ciclo 1: envia imagem de resultado no step 3
         return [
             {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
             {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
@@ -108,7 +98,6 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
         ]
 
     elif cycle == 1:
-        # --- CICLO 2: Curiosidade + urgência leve ---
         step1_variants = [
             f"{saudacao}vi que ainda não tivemos chance de conversar. Tem alguma dúvida sobre como a IA funcionaria no seu negócio?",
             f"{saudacao}passando pra ver se surgiu alguma dúvida. Fico à disposição pra explicar qualquer coisa!",
@@ -125,7 +114,6 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
             f"{saudacao}entendo que o momento pode não ser ideal. Quando fizer sentido, é só chamar que a gente retoma de onde parou!",
             f"Sem problemas! Quando sentir que é hora, estou por aqui. Sucesso no seu negócio!",
         ]
-        # Ciclo 2+: NÃO envia imagem (só texto)
         return [
             {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
             {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
@@ -133,7 +121,6 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
         ]
 
     else:
-        # --- CICLO 3+: Despedida final (último ciclo, sem repetição) ---
         step1_variants = [
             f"{saudacao}não quero ser inconveniente! Só queria garantir que você sabe que estou à disposição caso precise",
             f"{saudacao}última passada por aqui! Se um dia quiser conhecer a IA, é só mandar um oi",
@@ -153,104 +140,109 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
         ]
 
 
-def schedule_followups(phone_number: str, nome: str = "", nicho: str = "", resumo: str = ""):
+def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
     """Agenda 3 follow-ups variados no Redis (sorted set), avançando o ciclo a cada chamada."""
     if not redis_client:
         return
 
-    # Cancela anteriores e reagenda do zero
-    if has_active_followups(phone_number):
-        cancel_followups(phone_number)
+    if has_active_followups(phone_number, instance_id):
+        cancel_followups(phone_number, instance_id)
 
-    # Avança o ciclo (0 → 1 → 2). Ciclo 2+ = último ciclo, não repete mais
-    cycle = _advance_followup_cycle(phone_number)
+    cycle = _advance_followup_cycle(phone_number, instance_id)
 
-    # Ciclo 3+ = já enviou despedida final, não agenda mais
     if cycle > 2:
         print(f"[FOLLOWUP] Lead {phone_number} já passou por todos os ciclos. Não reagendando.")
         return
 
     intervals = INTERVALS_OWNER if phone_number == OWNER_NUMBER else INTERVALS_NORMAL
-    now = time.time()
 
-    # Step 1: sempre no dia seguinte entre 8h e 9h (horário SP)
     t1 = _next_morning_timestamp()
-    # Steps 2 e 3: relativos ao step 1
     timestamps = [t1, t1 + intervals[1] - intervals[0], t1 + intervals[2] - intervals[0]]
 
     messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
 
-    followups_key = f"{KEY_PREFIX}:followups"
+    prefix = redis_prefix(instance_id)
+    followups_key = f"{prefix}:followups"
     for i, msg in enumerate(messages):
+        # Embute instance_id no item para o scheduler escolher o token correto
+        msg["instance_id"] = str(instance_id)
         timestamp = timestamps[i]
         raw = json.dumps(msg, ensure_ascii=False)
         redis_client.zadd(followups_key, {raw: timestamp})
-        redis_client.sadd(f"{KEY_PREFIX}:followup:members:{phone_number}", raw)
+        redis_client.sadd(f"{prefix}:followup:members:{phone_number}", raw)
 
-    redis_client.set(f"{KEY_PREFIX}:followup:active:{phone_number}", "1")
-    print(f"[FOLLOWUP] 3 follow-ups agendados para {phone_number}")
+    redis_client.set(f"{prefix}:followup:active:{phone_number}", "1")
+    print(f"[FOLLOWUP] 3 follow-ups agendados para {phone_number} [inst {instance_id}]")
 
 
-def cancel_followups(phone_number: str):
+def cancel_followups(phone_number: str, instance_id):
     """Remove todos os follow-ups pendentes de um lead."""
     if not redis_client:
         return
 
-    members_key = f"{KEY_PREFIX}:followup:members:{phone_number}"
+    prefix = redis_prefix(instance_id)
+    members_key = f"{prefix}:followup:members:{phone_number}"
     members = redis_client.smembers(members_key)
 
-    followups_key = f"{KEY_PREFIX}:followups"
+    followups_key = f"{prefix}:followups"
     if members:
         for raw in members:
             redis_client.zrem(followups_key, raw)
         redis_client.delete(members_key)
 
-    redis_client.delete(f"{KEY_PREFIX}:followup:active:{phone_number}")
-    print(f"[FOLLOWUP] Follow-ups cancelados para {phone_number}")
+    redis_client.delete(f"{prefix}:followup:active:{phone_number}")
+    print(f"[FOLLOWUP] Follow-ups cancelados para {phone_number} [inst {instance_id}]")
 
 
-def has_active_followups(phone_number: str) -> bool:
+def has_active_followups(phone_number: str, instance_id) -> bool:
     """Verifica se o lead tem follow-ups pendentes (O(1))."""
     if not redis_client:
         return False
-    return redis_client.exists(f"{KEY_PREFIX}:followup:active:{phone_number}") == 1
+    return redis_client.exists(f"{redis_prefix(instance_id)}:followup:active:{phone_number}") == 1
 
 
-def get_due_followups(now_timestamp: float) -> list:
-    """Retorna follow-ups com timestamp <= now (prontos para envio)."""
+def get_due_followups(now_timestamp: float, instance_id) -> list:
+    """Retorna follow-ups com timestamp <= now (prontos para envio) de uma instância."""
     if not redis_client:
         return []
 
-    followups_key = f"{KEY_PREFIX}:followups"
+    followups_key = f"{redis_prefix(instance_id)}:followups"
     raw_items = redis_client.zrangebyscore(followups_key, 0, now_timestamp)
     results = []
     for raw in raw_items:
         try:
             item = json.loads(raw)
-            item["_raw"] = raw  # Guarda o JSON original para remoção
+            item["_raw"] = raw
+            # Defensivo: garante que o item saiba sua instância mesmo se foi migrado sem o campo
+            item.setdefault("instance_id", str(instance_id))
             results.append(item)
         except json.JSONDecodeError:
             redis_client.zrem(followups_key, raw)
     return results
 
 
-def remove_followup(raw_json: str, phone_number: str):
+def get_all_instance_ids() -> list:
+    """Retorna lista de instance_ids configurados (para o scheduler iterar)."""
+    return list(INSTANCES.keys())
+
+
+def remove_followup(raw_json: str, phone_number: str, instance_id):
     """Remove um follow-up específico após envio."""
     if not redis_client:
         return
-    followups_key = f"{KEY_PREFIX}:followups"
+    prefix = redis_prefix(instance_id)
+    followups_key = f"{prefix}:followups"
     redis_client.zrem(followups_key, raw_json)
-    redis_client.srem(f"{KEY_PREFIX}:followup:members:{phone_number}", raw_json)
+    redis_client.srem(f"{prefix}:followup:members:{phone_number}", raw_json)
 
-    # Se não restam mais membros, limpa o flag active
-    remaining = redis_client.scard(f"{KEY_PREFIX}:followup:members:{phone_number}")
+    remaining = redis_client.scard(f"{prefix}:followup:members:{phone_number}")
     if remaining == 0:
-        redis_client.delete(f"{KEY_PREFIX}:followup:active:{phone_number}")
+        redis_client.delete(f"{prefix}:followup:active:{phone_number}")
 
 
-def reschedule_followup(raw_json: str, new_timestamp: float):
+def reschedule_followup(raw_json: str, new_timestamp: float, instance_id):
     """Reagenda um follow-up para novo horário (ex: horário comercial)."""
     if not redis_client:
         return
-    followups_key = f"{KEY_PREFIX}:followups"
+    followups_key = f"{redis_prefix(instance_id)}:followups"
     redis_client.zadd(followups_key, {raw_json: new_timestamp})

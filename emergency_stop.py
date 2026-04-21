@@ -17,7 +17,6 @@ import argparse
 
 import redis
 
-KEY_PREFIX = "disparo"
 BLOCK_TTL_SECONDS = 60 * 60 * 24 * 365  # 1 ano
 
 
@@ -25,10 +24,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--phone", required=True, help="Numero do lead (ex: 5513997957799)")
     parser.add_argument("--motivo", default="IA detectada", help="Motivo do bloqueio")
+    parser.add_argument("--instance", required=True, help="ID da instancia (1, 2 ou 3)")
     args = parser.parse_args()
 
     phone = args.phone.strip()
     motivo = args.motivo.strip()
+    instance_id = args.instance.strip()
+    KEY_PREFIX = f"disparo:{instance_id}"
 
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     r = redis.Redis.from_url(redis_url, decode_responses=True)
@@ -98,7 +100,8 @@ def main():
             f"Motivo: {motivo}\n"
             f"Acoes: IA bloqueada 1 ano, follow-ups cancelados, evento removido (se havia)."
         )
-        send_message("5511989887525@s.whatsapp.net", texto)
+        from config.instances import OWNER_NUMBER
+        send_message(f"{OWNER_NUMBER}@s.whatsapp.net", texto, instance_id)
         print(f"[OK] Equipe alertada via WhatsApp")
     except Exception as e:
         print(f"[AVISO] Falha ao alertar equipe: {e}")

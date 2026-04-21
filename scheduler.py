@@ -6,8 +6,9 @@ load_dotenv()
 
 from tools.manage_followups import (
     get_due_followups, remove_followup, reschedule_followup,
-    has_active_followups, OWNER_NUMBER
+    has_active_followups, get_all_instance_ids,
 )
+from config.instances import OWNER_NUMBER
 from tools.send_whatsapp import send_message
 from tools.send_media import send_image
 from tools.manage_history import save_message
@@ -32,10 +33,10 @@ def next_business_morning() -> float:
     return target.timestamp()
 
 
-def process_due_followups():
-    """Busca e envia follow-ups que já passaram do horário agendado."""
+def process_due_followups_for_instance(instance_id: str):
+    """Busca e envia follow-ups vencidos de uma instância específica."""
     now = time.time()
-    due = get_due_followups(now)
+    due = get_due_followups(now, instance_id)
 
     if not due:
         return
@@ -44,18 +45,20 @@ def process_due_followups():
         phone = item["phone"]
         step = item.get("step", 0)
         raw = item["_raw"]
+        # Item garantidamente tem instance_id (set pelo get_due_followups)
+        item_instance = item.get("instance_id", instance_id)
 
         # Lead respondeu entre a query e o envio?
-        if not has_active_followups(phone):
-            remove_followup(raw, phone)
-            print(f"[SCHEDULER] Step {step} de {phone} cancelado (lead respondeu)")
+        if not has_active_followups(phone, item_instance):
+            remove_followup(raw, phone, item_instance)
+            print(f"[SCHEDULER inst {item_instance}] Step {step} de {phone} cancelado (lead respondeu)")
             continue
 
         # Horário comercial (pula check para owner)
         if phone != OWNER_NUMBER and not is_business_hours():
             new_time = next_business_morning()
-            reschedule_followup(raw, new_time)
-            print(f"[SCHEDULER] Step {step} de {phone} reagendado para próxima manhã 8h")
+            reschedule_followup(raw, new_time, item_instance)
+            print(f"[SCHEDULER inst {item_instance}] Step {step} de {phone} reagendado para próxima manhã 8h")
             continue
 
         # Envia conforme tipo
@@ -63,28 +66,35 @@ def process_due_followups():
         whatsapp_id = f"{phone}@s.whatsapp.net"
 
         if msg_type == "image":
-            # Envia texto de contexto antes da imagem, se houver
             caption = item.get("message", "")
             if caption:
-                send_message(whatsapp_id, caption)
+                send_message(whatsapp_id, caption, item_instance)
                 time.sleep(2)
             image_url = item.get("image_url", "")
-            success = send_image(whatsapp_id, image_url)
+            success = send_image(whatsapp_id, image_url, item_instance)
             if success:
                 texto_historico = (caption + "\n[imagem de resultado enviada]") if caption else "[imagem de resultado enviada]"
-                save_message(phone, "ai", texto_historico)
-                mark_ai_sent_now(phone)
-            print(f"[SCHEDULER] Step {step} (imagem) para {phone}: {'OK' if success else 'FALHA'}")
+                save_message(phone, "ai", texto_historico, item_instance)
+                mark_ai_sent_now(phone, item_instance)
+            print(f"[SCHEDULER inst {item_instance}] Step {step} (imagem) para {phone}: {'OK' if success else 'FALHA'}")
         else:
             message = item.get("message", "")
-            success = send_message(whatsapp_id, message)
+            success = send_message(whatsapp_id, message, item_instance)
             if success:
-                save_message(phone, "ai", message)
-                mark_ai_sent_now(phone)
-            print(f"[SCHEDULER] Step {step} (texto) para {phone}: {'OK' if success else 'FALHA'}")
+                save_message(phone, "ai", message, item_instance)
+                mark_ai_sent_now(phone, item_instance)
+            print(f"[SCHEDULER inst {item_instance}] Step {step} (texto) para {phone}: {'OK' if success else 'FALHA'}")
 
-        # Remove do sorted set após envio
-        remove_followup(raw, phone)
+        remove_followup(raw, phone, item_instance)
+
+
+def process_due_followups():
+    """Itera por todas as instâncias configuradas e processa follow-ups vencidos de cada uma."""
+    for instance_id in get_all_instance_ids():
+        try:
+            process_due_followups_for_instance(instance_id)
+        except Exception as e:
+            print(f"[SCHEDULER inst {instance_id}] Erro processando follow-ups: {e}")
 
 
 def main():

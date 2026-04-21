@@ -11,9 +11,16 @@ services:
       - RABBITMQ_PASS
       - RABBITMQ_VHOST
       - REDIS_URL
-      - UAZAPI_TOKEN
       - UAZAPI_URL
-      - UAZAPI_INSTANCE
+      - UAZAPI_TOKEN_1
+      - UAZAPI_INSTANCE_1
+      - UAZAPI_TOKEN_2
+      - UAZAPI_INSTANCE_2
+      - UAZAPI_TOKEN_3
+      - UAZAPI_INSTANCE_3
+      - UAZAPI_ALERT_GROUP_TOKEN
+      - UAZAPI_ALERT_GROUP_ID
+      - OWNER_NUMBER
       - LLM_API_KEY
     networks:
       - network_public # Rede que conecta ao Traefik e ao RabbitMQ externo
@@ -48,13 +55,23 @@ services:
       - RABBITMQ_PASS
       - RABBITMQ_VHOST
       - REDIS_URL
-      - UAZAPI_TOKEN
       - UAZAPI_URL
-      - UAZAPI_INSTANCE
+      - UAZAPI_TOKEN_1
+      - UAZAPI_INSTANCE_1
+      - UAZAPI_TOKEN_2
+      - UAZAPI_INSTANCE_2
+      - UAZAPI_TOKEN_3
+      - UAZAPI_INSTANCE_3
+      - UAZAPI_ALERT_GROUP_TOKEN
+      - UAZAPI_ALERT_GROUP_ID
+      - OWNER_NUMBER
       - LLM_API_KEY
       - GOOGLE_CREDENTIALS_JSON
       - GOOGLE_CALENDAR_ID
       - GOOGLE_IMPERSONATE_USER
+      - CRM_API_URL
+      - CRM_API_KEY
+      - CRM_OWNER_ID
     networks:
       - network_public
       - default
@@ -66,9 +83,16 @@ services:
     command: python scheduler.py
     environment:
       - REDIS_URL
-      - UAZAPI_TOKEN
       - UAZAPI_URL
-      - UAZAPI_INSTANCE
+      - UAZAPI_TOKEN_1
+      - UAZAPI_INSTANCE_1
+      - UAZAPI_TOKEN_2
+      - UAZAPI_INSTANCE_2
+      - UAZAPI_TOKEN_3
+      - UAZAPI_INSTANCE_3
+      - UAZAPI_ALERT_GROUP_TOKEN
+      - UAZAPI_ALERT_GROUP_ID
+      - OWNER_NUMBER
     networks:
       - network_public
       - default

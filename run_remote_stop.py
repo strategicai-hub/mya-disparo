@@ -82,11 +82,12 @@ def exec_command(container_id, cmd_list):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Uso: python run_remote_stop.py <phone> [motivo]")
+    if len(sys.argv) < 3:
+        print("Uso: python run_remote_stop.py <instance_id> <phone> [motivo]")
         sys.exit(1)
-    phone = sys.argv[1].strip()
-    motivo = sys.argv[2].strip() if len(sys.argv) > 2 else "IA detectada"
+    instance_id = sys.argv[1].strip()
+    phone = sys.argv[2].strip()
+    motivo = sys.argv[3].strip() if len(sys.argv) > 3 else "IA detectada"
 
     print(f"[1/3] Procurando container de {SERVICE_NAME}...")
     container_id = find_container_id()
@@ -96,9 +97,10 @@ def main():
     inline = f"""
 import os, json
 import redis
-KEY_PREFIX = "disparo"
+KEY_PREFIX = "disparo:{instance_id}"
 phone = "{phone}"
 motivo = "{motivo}"
+instance_id = "{instance_id}"
 r = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
 r.ping()
 r.setex(f"{{KEY_PREFIX}}:ai_blocked:{{phone}}", 60*60*24*365, f"ia_detectada:{{motivo}}")
@@ -150,7 +152,8 @@ try:
         f"Motivo: {{motivo}}\\n"
         f"Acoes: IA bloqueada 1 ano, follow-ups cancelados, evento removido (se havia)."
     )
-    send_message("5511989887525@s.whatsapp.net", txt)
+    from config.instances import OWNER_NUMBER
+    send_message(f"{{OWNER_NUMBER}}@s.whatsapp.net", txt, instance_id)
     print(f"[OK] Equipe alertada")
 except Exception as e:
     print(f"[AVISO] Falha ao alertar equipe: {{e}}")
