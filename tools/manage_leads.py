@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import redis
 from dotenv import load_dotenv
 
@@ -59,6 +60,32 @@ def clear_lead_info(phone_number: str):
 # TTL padrão do bloqueio por suspeita de IA: 1 ano (reaproveita a chave ai_blocked
 # ja lida pelo api.py — mesma flag usada por Chatwoot)
 AI_BLOCK_TTL_SECONDS = 60 * 60 * 24 * 365
+
+# TTL para o timestamp "ultima msg da Mya": 24h basta, depois disso tempo de resposta
+# nao eh mais sinal confiavel de bot
+LAST_AI_SENT_TTL_SECONDS = 60 * 60 * 24
+
+
+def mark_ai_sent_now(phone_number: str) -> None:
+    """Marca agora como instante em que a Mya enviou mensagem ao lead."""
+    if not redis_client:
+        return
+    key = f"{KEY_PREFIX}:last_ai_sent:{phone_number}"
+    redis_client.setex(key, LAST_AI_SENT_TTL_SECONDS, str(time.time()))
+
+
+def seconds_since_last_ai_msg(phone_number: str) -> float | None:
+    """Retorna segundos desde a ultima msg da Mya, ou None se nao houver registro."""
+    if not redis_client:
+        return None
+    key = f"{KEY_PREFIX}:last_ai_sent:{phone_number}"
+    raw = redis_client.get(key)
+    if not raw:
+        return None
+    try:
+        return time.time() - float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def block_lead_as_ai(phone_number: str, motivo: str) -> bool:

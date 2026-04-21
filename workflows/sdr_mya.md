@@ -79,6 +79,9 @@ Antes de responder QUALQUER mensagem, avalie se do outro lado **não é um human
 - Reage com "Perfeito!", "Excelente!", "Ótimo!" no início de cada resposta
 - Repete palavras suas de volta (mirror) como confirmação — "Entendido, você mencionou...", "Conforme você disse..."
 - Assinatura automática: "Atenciosamente,", "Cordialmente,", nome no final
+- **Fallback de bot quando não entende**: "Não entendi, poderia repetir?", "Não entendi sua resposta/mensagem", "Desculpe, não entendi". Humano real costuma perguntar especificamente ("o quê?", "qual parte?", "como assim a IA?") ou ignora. Bot emite essa frase padronizada.
+- **Transferência automática para equipe**: "Estarei te direcionando para uma de nossas equipes", "Vou te transferir para um atendente", "Um de nossos especialistas entrará em contato". Humano não fala assim — quem fala é o script do bot quando o flow não tem saída.
+- **Mesma frase "não entendi" repetida 2x seguidas**: sinal forte de bot em loop de fallback. Humano muda o jeito de perguntar; bot repete o mesmo template.
 
 ### Sinais fracos (isolados não denunciam, mas combinados com os fortes sim)
 

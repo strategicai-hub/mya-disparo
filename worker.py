@@ -197,8 +197,23 @@ def process_message(msg_payload):
 
     # Detecção heurística pré-LLM: padrões óbvios de IA/atendente virtual no input do "lead"
     try:
-        from tools.ai_detector import detect as detect_ai
+        from tools.ai_detector import detect as detect_ai, detect_weak_generic
+        from tools.manage_leads import seconds_since_last_ai_msg
+
         is_ai, motivo_ai = detect_ai(text_message)
+
+        # Sinal fraco combinado: frase genérica curta + resposta muito rápida = bot
+        # A API tem debounce de 30s, então elapsed no worker = 30s + tempo real de resposta.
+        # elapsed < 40s significa que o "lead" respondeu em < 10s após a Mya enviar.
+        # Humano raramente consegue digitar em menos de 10s; bot leva 1-5s.
+        if not is_ai:
+            is_weak, motivo_weak = detect_weak_generic(text_message)
+            if is_weak:
+                elapsed = seconds_since_last_ai_msg(phone_number)
+                if elapsed is not None and elapsed < 40.0:
+                    is_ai = True
+                    motivo_ai = f"{motivo_weak} + resposta em {elapsed:.1f}s (pós-debounce)"
+
         if is_ai:
             log(f"[AI_DETECT] Heurística detectou IA em {phone_number}: {motivo_ai}")
             save_message(phone_number, "human", text_message)
@@ -518,6 +533,14 @@ def process_message(msg_payload):
                 log("[TOOL WHATSAPP] Resultado: FALHA - Uazapi não entregou a mensagem")
             elif indice < len(mensagens) - 1:
                 time.sleep(2)
+
+    # Marca o timestamp da última msg da Mya — usado pela heurística de detecção de IA
+    # (resposta muito rápida do "lead" + frase genérica curta = bot)
+    try:
+        from tools.manage_leads import mark_ai_sent_now
+        mark_ai_sent_now(phone_number)
+    except Exception as e:
+        log(f"[AI_DETECT] Falha ao marcar last_ai_sent (não crítico): {e}")
 
     # 7. AGENDA FOLLOW-UPS após toda resposta enviada (reseta timer se já existiam)
     # Não agenda se: acabou de confirmar reunião via tag OU via function calling (evento_criado) OU lead sem interesse

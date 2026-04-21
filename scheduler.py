@@ -11,6 +11,7 @@ from tools.manage_followups import (
 from tools.send_whatsapp import send_message
 from tools.send_media import send_image
 from tools.manage_history import save_message
+from tools.manage_leads import mark_ai_sent_now
 
 SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
@@ -72,12 +73,14 @@ def process_due_followups():
             if success:
                 texto_historico = (caption + "\n[imagem de resultado enviada]") if caption else "[imagem de resultado enviada]"
                 save_message(phone, "ai", texto_historico)
+                mark_ai_sent_now(phone)
             print(f"[SCHEDULER] Step {step} (imagem) para {phone}: {'OK' if success else 'FALHA'}")
         else:
             message = item.get("message", "")
             success = send_message(whatsapp_id, message)
             if success:
                 save_message(phone, "ai", message)
+                mark_ai_sent_now(phone)
             print(f"[SCHEDULER] Step {step} (texto) para {phone}: {'OK' if success else 'FALHA'}")
 
         # Remove do sorted set após envio
