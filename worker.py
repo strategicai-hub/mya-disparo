@@ -535,7 +535,14 @@ def process_message(msg_payload):
         log(f"[AI_DETECT] Falha ao marcar last_ai_sent (não crítico): {e}")
 
     # 7. AGENDA FOLLOW-UPS após toda resposta enviada
-    if not match_humano and not evento_criado and not sem_interesse:
+    # Guard: lead com reunião agendada (event_id ativo) nunca recebe follow-up —
+    # cobre tanto o evento criado nesta sessão (evento_criado) quanto em sessões anteriores.
+    event_id_final = get_lead_info(phone_number, instance_id).get("event_id", "")
+    if event_id_final:
+        log(f"[TOOL FOLLOWUP] Pulado: lead {phone_number} tem reunião agendada (event_id={event_id_final}). Cancelando follow-ups residuais por garantia.")
+        from tools.manage_followups import cancel_followups as _cancel_safety
+        _cancel_safety(phone_number, instance_id)
+    elif not match_humano and not evento_criado and not sem_interesse:
         log(f"[TOOL FOLLOWUP] Executando schedule_followups(telefone={phone_number}, inst={instance_id}, nome={nome_conhecido}, nicho={nicho_conhecido})")
         from tools.manage_followups import schedule_followups
         schedule_followups(phone_number, instance_id, nome=nome_conhecido, nicho=nicho_conhecido)

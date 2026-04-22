@@ -141,8 +141,17 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
 
 
 def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
-    """Agenda 3 follow-ups variados no Redis (sorted set), avançando o ciclo a cada chamada."""
+    """Agenda 3 follow-ups variados no Redis (sorted set), avançando o ciclo a cada chamada.
+
+    Bloqueia silenciosamente se o lead tem reunião agendada (event_id preenchido) —
+    após agendamento, follow-up é PROIBIDO para aquele número.
+    """
     if not redis_client:
+        return
+
+    from tools.manage_leads import get_lead_info
+    if get_lead_info(phone_number, instance_id).get("event_id"):
+        print(f"[FOLLOWUP] Bloqueado: {phone_number} tem reunião agendada [inst {instance_id}]")
         return
 
     if has_active_followups(phone_number, instance_id):

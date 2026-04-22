@@ -129,9 +129,14 @@ async def _handle_webhook(instance_id: str, request: Request):
                         except Exception as e:
                             print(f"[DISPARO] Erro ao salvar no histórico: {e}")
                     try:
-                        from tools.manage_followups import schedule_followups
-                        schedule_followups(lead_phone, instance_id)
-                        print(f"[DISPARO] Follow-ups agendados para {lead_phone} [inst {instance_id}]")
+                        from tools.manage_leads import get_lead_info
+                        event_id_atual = get_lead_info(lead_phone, instance_id).get("event_id", "")
+                        if event_id_atual:
+                            print(f"[DISPARO] Follow-ups NÃO agendados: lead {lead_phone} já tem reunião (event_id={event_id_atual}) [inst {instance_id}]")
+                        else:
+                            from tools.manage_followups import schedule_followups
+                            schedule_followups(lead_phone, instance_id)
+                            print(f"[DISPARO] Follow-ups agendados para {lead_phone} [inst {instance_id}]")
                     except Exception as e:
                         print(f"[DISPARO] Erro ao agendar follow-ups: {e}")
                 return {"status": "success", "message": "Disparo n8n registrado"}
