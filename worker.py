@@ -135,8 +135,10 @@ CALENDAR_TOOLS = types.Tool(function_declarations=[
                 "nome": types.Schema(type="STRING", description="Nome do lead"),
                 "telefone": types.Schema(type="STRING", description="Telefone do lead"),
                 "dia_horario": types.Schema(type="STRING", description="Dia e horário da reunião ex: '15/04 às 10:00'"),
+                "nicho": types.Schema(type="STRING", description="Nicho/segmento do lead (ex: 'clínica de estética'). Se não souber, envie 'não informado'."),
+                "empresa": types.Schema(type="STRING", description="Nome da empresa extraído do perfil do WhatsApp (wa_name). Se o wa_name for um nome de pessoa, estiver vazio ou não for identificável como empresa, envie 'nome não localizado'."),
             },
-            required=["nome", "telefone", "dia_horario"]
+            required=["nome", "telefone", "dia_horario", "nicho", "empresa"]
         )
     ),
     types.FunctionDeclaration(
@@ -317,11 +319,12 @@ def process_message(msg_payload):
 
                 if fn_name == "lead_agendou":
                     alerta = (
-                        f"📅 *LEAD AGENDOU REUNIÃO* 📅\n"
-                        f"Instância: {instance_id}\n"
+                        f"📅 *DISPAROS - LEAD AGENDOU REUNIÃO* 📅\n"
                         f"Nome: {fn_args.get('nome', '?')}\n"
                         f"Telefone: {fn_args.get('telefone', '?')}\n"
-                        f"Dia/Horário: {fn_args.get('dia_horario', '?')}"
+                        f"Dia/Horário: {fn_args.get('dia_horario', '?')}\n"
+                        f"Nicho: {fn_args.get('nicho') or 'não informado'}\n"
+                        f"Empresa: {fn_args.get('empresa') or 'nome não localizado'}"
                     )
                     ok_alerta = send_group_alert(alerta, ALERT_GROUP_ID)
                     result = {"success": bool(ok_alerta), "message": "Equipe notificada via grupo" if ok_alerta else "Falha ao notificar grupo"}
