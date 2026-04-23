@@ -135,8 +135,10 @@ CALENDAR_TOOLS = types.Tool(function_declarations=[
                 "nome": types.Schema(type="STRING", description="Nome do lead"),
                 "telefone": types.Schema(type="STRING", description="Telefone do lead"),
                 "dia_horario": types.Schema(type="STRING", description="Dia e horário da reunião ex: '15/04 às 10:00'"),
+                "nicho": types.Schema(type="STRING", description="Nicho/segmento do lead (ex: 'clínica de estética'). Se não souber, envie 'não informado'."),
+                "empresa": types.Schema(type="STRING", description="Nome da empresa extraído do perfil do WhatsApp (wa_name). Se o wa_name for um nome de pessoa, estiver vazio ou não for identificável como empresa, envie 'nome não localizado'."),
             },
-            required=["nome", "telefone", "dia_horario"]
+            required=["nome", "telefone", "dia_horario", "nicho", "empresa"]
         )
     ),
     types.FunctionDeclaration(
@@ -317,11 +319,12 @@ def process_message(msg_payload):
 
                 if fn_name == "lead_agendou":
                     alerta = (
-                        f"📅 *LEAD AGENDOU REUNIÃO* 📅\n"
-                        f"Instância: {instance_id}\n"
+                        f"📅 *GOOGLE ADS - LEAD AGENDOU REUNIÃO* 📅\n"
                         f"Nome: {fn_args.get('nome', '?')}\n"
                         f"Telefone: {fn_args.get('telefone', '?')}\n"
-                        f"Dia/Horário: {fn_args.get('dia_horario', '?')}"
+                        f"Dia/Horário: {fn_args.get('dia_horario', '?')}\n"
+                        f"Nicho: {fn_args.get('nicho') or 'não informado'}\n"
+                        f"Empresa: {fn_args.get('empresa') or 'nome não localizado'}"
                     )
                     ok_alerta = send_group_alert(alerta, ALERT_GROUP_ID)
                     result = {"success": bool(ok_alerta), "message": "Equipe notificada via grupo" if ok_alerta else "Falha ao notificar grupo"}
@@ -502,6 +505,11 @@ def process_message(msg_payload):
         cancel_fu(phone_number, instance_id)
         log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - follow-ups cancelados")
 
+    # 4b. Checa se a Mya direcionou o lead ao SUPORTE SAI — bloqueia IA indefinidamente
+    suporte_sai = bool(re.search(r'\bSUPORTE\s+SAI\b', resposta_ai, re.IGNORECASE))
+    if suporte_sai:
+        log(f"[SUPORTE_SAI] Frase detectada na resposta para {phone_number} — será bloqueado após envio")
+
     # 5. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
     save_message(phone_number, "ai", resposta_ai.replace("[PDF_APRESENTACAO]", "").strip(), instance_id)
 
@@ -537,6 +545,13 @@ def process_message(msg_payload):
     # 7. AGENDA FOLLOW-UPS após toda resposta enviada
     # Guard: lead com reunião agendada (event_id ativo) nunca recebe follow-up —
     # cobre tanto o evento criado nesta sessão (evento_criado) quanto em sessões anteriores.
+    if suporte_sai:
+        log(f"[SUPORTE_SAI] Bloqueando IA indefinidamente para {phone_number}")
+        from tools.manage_leads import block_lead_for_support
+        block_lead_for_support(phone_number, instance_id)
+        _save_session_log(phone_number, instance_id)
+        return
+
     event_id_final = get_lead_info(phone_number, instance_id).get("event_id", "")
     if event_id_final:
         log(f"[TOOL FOLLOWUP] Pulado: lead {phone_number} tem reunião agendada (event_id={event_id_final}). Cancelando follow-ups residuais por garantia.")

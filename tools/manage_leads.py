@@ -147,3 +147,27 @@ def block_lead_as_ai(phone_number: str, motivo: str, instance_id) -> bool:
 
     print(f"[AI_BLOCK] Lead {phone_number} bloqueado. Motivo: {motivo}")
     return True
+
+
+def block_lead_for_support(phone_number: str, instance_id) -> bool:
+    """
+    Bloqueia um número indefinidamente porque a Mya o direcionou ao SUPORTE SAI:
+    marca ai_blocked sem TTL, cancela follow-ups, limpa buffer de rajada e avisa a equipe.
+    Não cancela o evento do Calendar (lead pode ter reunião marcada).
+    """
+    if not redis_client:
+        return False
+
+    from tools.manage_followups import cancel_followups
+
+    prefix = redis_prefix(instance_id)
+
+    redis_client.set(f"{prefix}:ai_blocked:{phone_number}", "suporte_sai")
+
+    cancel_followups(phone_number, instance_id)
+
+    redis_client.delete(f"{prefix}:burst:{phone_number}")
+    redis_client.delete(f"{prefix}:burst_time:{phone_number}")
+
+    print(f"[SUPORTE_SAI] Lead {phone_number} bloqueado indefinidamente (direcionado ao suporte)")
+    return True

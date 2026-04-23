@@ -115,6 +115,17 @@ async def _handle_webhook(instance_id: str, request: Request):
             msg = payload.get("message", {})
             prefix = redis_prefix(instance_id)
 
+            # Handoff ao SUPORTE SAI: qualquer mensagem enviada (fromMe — Mya, operador ou outro projeto)
+            # contendo a frase bloqueia a IA indefinidamente para aquele lead. Nenhuma mensagem futura
+            # daquele número vai para o RabbitMQ.
+            if msg.get("fromMe") and re.search(r'\bSUPORTE\s+SAI\b', msg.get("text", "") or "", re.IGNORECASE):
+                raw_chatid = msg.get("chatid", "")
+                lead_phone = raw_chatid.split("@")[0]
+                if lead_phone:
+                    from tools.manage_leads import block_lead_for_support
+                    block_lead_for_support(lead_phone, instance_id)
+                return {"status": "success", "message": "SUPORTE SAI — IA bloqueada indefinidamente"}
+
             # Mensagem de prospecção enviada pelo n8n → salva histórico e agenda follow-ups
             if msg.get("fromMe") and msg.get("track_source") == "n8n":
                 raw_chatid = msg.get("chatid", "")
