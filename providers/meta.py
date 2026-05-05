@@ -7,6 +7,7 @@ faz o stripping para o formato E.164 esperado pela Graph API.
 import requests
 
 from config.instances import META_GRAPH_VERSION, get_meta_config
+from tools.audit import notify_outbound
 
 
 def _normalize_to(phone_number: str) -> str:
@@ -14,12 +15,13 @@ def _normalize_to(phone_number: str) -> str:
     return phone_number.split("@")[0].lstrip("+")
 
 
-def _post(instance_id, payload: dict) -> bool:
+def _post(instance_id, payload: dict) -> tuple[bool, str]:
+    """Retorna (ok, wamid). wamid é '' em caso de falha."""
     try:
         cfg = get_meta_config(instance_id)
     except ValueError as e:
         print(f"Erro Meta: {e}")
-        return False
+        return False, ""
 
     url = f"https://graph.facebook.com/{META_GRAPH_VERSION}/{cfg['phone_number_id']}/messages"
     headers = {
@@ -29,12 +31,17 @@ def _post(instance_id, payload: dict) -> bool:
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code in (200, 201):
-            return True
+            wamid = ""
+            try:
+                wamid = (response.json().get("messages") or [{}])[0].get("id", "") or ""
+            except Exception:
+                pass
+            return True, wamid
         print(f"Erro Meta API [inst {instance_id}] {response.status_code}: {response.text[:300]}")
-        return False
+        return False, ""
     except requests.exceptions.RequestException as e:
         print(f"Erro ao chamar Meta API [inst {instance_id}]: {e}")
-        return False
+        return False, ""
 
 
 def send_text(phone_number: str, text: str, instance_id) -> bool:
@@ -44,7 +51,10 @@ def send_text(phone_number: str, text: str, instance_id) -> bool:
         "type": "text",
         "text": {"preview_url": False, "body": text},
     }
-    return _post(instance_id, payload)
+    ok, wamid = _post(instance_id, payload)
+    if ok:
+        notify_outbound(instance_id, phone_number, text, wamid, "text")
+    return ok
 
 
 def send_pdf(phone_number: str, file_url: str, filename: str, instance_id) -> bool:
@@ -54,7 +64,10 @@ def send_pdf(phone_number: str, file_url: str, filename: str, instance_id) -> bo
         "type": "document",
         "document": {"link": file_url, "filename": filename},
     }
-    return _post(instance_id, payload)
+    ok, wamid = _post(instance_id, payload)
+    if ok:
+        notify_outbound(instance_id, phone_number, f"[document] {filename}", wamid, "document")
+    return ok
 
 
 def send_image(phone_number: str, image_url: str, instance_id) -> bool:
@@ -64,4 +77,7 @@ def send_image(phone_number: str, image_url: str, instance_id) -> bool:
         "type": "image",
         "image": {"link": image_url},
     }
-    return _post(instance_id, payload)
+    ok, wamid = _post(instance_id, payload)
+    if ok:
+        notify_outbound(instance_id, phone_number, "[image]", wamid, "image")
+    return ok

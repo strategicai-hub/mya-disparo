@@ -226,9 +226,18 @@ async def receive_meta_forward(instance_id: str, request: Request):
     from_phone = (body.get("from") or "").lstrip("+").split("@")[0]
     text = body.get("text") or ""
     name = body.get("name") or "Lead"
+    tenant_id = (body.get("tenantId") or "").strip()
 
     if not from_phone or not text:
         return {"status": "ignored", "reason": "missing from/text"}
+
+    # Memoriza tenant_id do disparador para auditoria de outbound (24h).
+    if tenant_id:
+        try:
+            from tools.audit import remember_tenant
+            remember_tenant(instance_id, from_phone, tenant_id)
+        except Exception as e:
+            print(f"[AUDIT] remember_tenant falhou (não crítico): {e}")
 
     # Mesma estrutura interna que o webhook UAZAPI produz
     payload = {
