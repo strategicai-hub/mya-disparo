@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from config.instances import redis_prefix, valid_instance, OWNER_NUMBER
+from config.instances import redis_prefix, valid_instance, OWNER_NUMBER, get_provider
 
 load_dotenv()
 
@@ -29,6 +29,10 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 RABBITMQ_QUEUE = "mya_disparo"
+
+# Segredo compartilhado com o disparador-whatsapp para autenticar o forward Meta.
+# Quando vazio, o endpoint /mya-disparo-meta-{instance_id} fica desabilitado.
+CHATBOT_FORWARD_SECRET = os.getenv("CHATBOT_FORWARD_SECRET", "")
 
 # Configuração do Redis para Buffer Antirrajadas (prefixo por instância)
 _REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -192,6 +196,74 @@ async def _handle_webhook(instance_id: str, request: Request):
 async def receive_whatsapp_webhook(instance_id: str, request: Request):
     """Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas (roteado por instância)."""
     return await _handle_webhook(instance_id, request)
+
+
+@app.post("/mya-disparo-meta-{instance_id}")
+async def receive_meta_forward(instance_id: str, request: Request):
+    """Recebe inbound da API oficial Meta encaminhado pelo disparador-whatsapp.
+
+    Payload esperado:
+        { "from": "5511...", "name": "...", "text": "...", "messageId": "wamid..." }
+
+    Autenticação via header `x-chatbot-secret` igual a CHATBOT_FORWARD_SECRET.
+    Normaliza para o shape interno UAZAPI e reutiliza o pipeline (debounce + fila).
+    """
+    if not CHATBOT_FORWARD_SECRET:
+        raise HTTPException(status_code=503, detail="CHATBOT_FORWARD_SECRET não configurado")
+    if request.headers.get("x-chatbot-secret") != CHATBOT_FORWARD_SECRET:
+        raise HTTPException(status_code=401, detail="secret inválido")
+
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
+    if get_provider(instance_id) != "meta":
+        raise HTTPException(status_code=400, detail=f"Instância '{instance_id}' não está configurada como provider 'meta'")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    from_phone = (body.get("from") or "").lstrip("+").split("@")[0]
+    text = body.get("text") or ""
+    name = body.get("name") or "Lead"
+
+    if not from_phone or not text:
+        return {"status": "ignored", "reason": "missing from/text"}
+
+    # Mesma estrutura interna que o webhook UAZAPI produz
+    payload = {
+        "EventType": "messages",
+        "message": {
+            "fromMe": False,
+            "chatid": f"{from_phone}@s.whatsapp.net",
+            "sender_pn": from_phone,
+            "senderName": name,
+            "text": text,
+        },
+    }
+
+    prefix = redis_prefix(instance_id)
+
+    if redis_client and redis_client.exists(f"{prefix}:ai_blocked:{from_phone}"):
+        print(f"[CHATWOOT] IA bloqueada para {from_phone} [inst {instance_id}] (Meta forward). Ignorando.")
+        return {"status": "ignored", "reason": "ai blocked"}
+
+    print(f"=== MENSAGEM RECEBIDA META [inst {instance_id}][{from_phone}] ===\nTexto: '{text}'\n============================")
+
+    if from_phone == OWNER_NUMBER:
+        print(f"-> Numero do proprietario detectado (Meta). Enviando direto sem delay [inst {instance_id}]...")
+        publish_to_rabbitmq(payload, instance_id)
+    elif redis_client:
+        redis_client.rpush(f"{prefix}:burst:{from_phone}", text)
+        redis_client.set(f"{prefix}:burst_time:{from_phone}", time.time())
+        task = asyncio.create_task(debounce_and_publish(from_phone, payload, instance_id))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        print(f"-> Acionou Delay de 30s para o Lead {from_phone} (Meta) [inst {instance_id}]...")
+    else:
+        publish_to_rabbitmq(payload, instance_id)
+
+    return {"status": "success"}
 
 
 @app.get("/mya-disparo-{instance_id}/logs/leads")

@@ -1,15 +1,13 @@
 import requests
 from dotenv import load_dotenv
 
-from config.instances import UAZAPI_URL, get_token, ALERT_GROUP_TOKEN, ALERT_GROUP_ID
+from config.instances import UAZAPI_URL, get_token, get_provider, ALERT_GROUP_TOKEN, ALERT_GROUP_ID
+from providers import meta as meta_provider
 
 load_dotenv()
 
 
-def send_message(phone_number: str, text: str, instance_id) -> bool:
-    """
-    Envia uma mensagem de texto via WhatsApp usando o token da instância informada.
-    """
+def _send_via_uazapi(phone_number: str, text: str, instance_id) -> bool:
     try:
         token = get_token(instance_id)
     except ValueError as e:
@@ -36,6 +34,13 @@ def send_message(phone_number: str, text: str, instance_id) -> bool:
     except requests.exceptions.RequestException as e:
         print(f"Erro ao enviar mensagem [inst {instance_id}]: {e}")
         return False
+
+
+def send_message(phone_number: str, text: str, instance_id) -> bool:
+    """Envia mensagem de texto via provider configurado para a instância (UAZAPI ou Meta)."""
+    if get_provider(instance_id) == "meta":
+        return meta_provider.send_text(phone_number, text, instance_id)
+    return _send_via_uazapi(phone_number, text, instance_id)
 
 
 def send_group_alert(text: str, group_id: str = ALERT_GROUP_ID) -> bool:
