@@ -10,7 +10,8 @@ UAZAPI_URL = os.getenv("UAZAPI_URL", "https://strategicai.uazapi.com")
 META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v22.0")
 
 # Lista canônica de instâncias suportadas. Adicione novos ids aqui.
-_INSTANCE_IDS = ["1", "2", "3", "gustavo"]
+# "disparo" = instância Meta Cloud API alimentada pelo disparador-whatsapp
+_INSTANCE_IDS = ["1", "2", "3", "gustavo", "disparo"]
 
 
 def _build_instances() -> dict:
