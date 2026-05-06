@@ -192,12 +192,6 @@ async def _handle_webhook(instance_id: str, request: Request):
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
 
 
-@app.post("/mya-disparo-{instance_id}")
-async def receive_whatsapp_webhook(instance_id: str, request: Request):
-    """Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas (roteado por instância)."""
-    return await _handle_webhook(instance_id, request)
-
-
 @app.post("/mya-disparo-meta-{instance_id}")
 async def receive_meta_forward(instance_id: str, request: Request):
     """Recebe inbound da API oficial Meta encaminhado pelo disparador-whatsapp.
@@ -273,6 +267,12 @@ async def receive_meta_forward(instance_id: str, request: Request):
         publish_to_rabbitmq(payload, instance_id)
 
     return {"status": "success"}
+
+
+@app.post("/mya-disparo-{instance_id}")
+async def receive_whatsapp_webhook(instance_id: str, request: Request):
+    """Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas (roteado por instância)."""
+    return await _handle_webhook(instance_id, request)
 
 
 @app.get("/mya-disparo-{instance_id}/logs/leads")
