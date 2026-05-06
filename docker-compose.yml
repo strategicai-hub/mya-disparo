@@ -22,6 +22,11 @@ services:
       - UAZAPI_ALERT_GROUP_ID
       - OWNER_NUMBER
       - LLM_API_KEY
+      - PROVIDER_DISPARO
+      - META_PHONE_NUMBER_ID_DISPARO
+      - META_ACCESS_TOKEN_DISPARO
+      - CHATBOT_FORWARD_SECRET
+      - DISPARADOR_AUDIT_URL
     networks:
       - network_public # Rede que conecta ao Traefik e ao RabbitMQ externo
       - default
@@ -72,6 +77,11 @@ services:
       - CRM_API_URL
       - CRM_API_KEY
       - CRM_OWNER_ID
+      - PROVIDER_DISPARO
+      - META_PHONE_NUMBER_ID_DISPARO
+      - META_ACCESS_TOKEN_DISPARO
+      - CHATBOT_FORWARD_SECRET
+      - DISPARADOR_AUDIT_URL
     networks:
       - network_public
       - default
@@ -93,6 +103,11 @@ services:
       - UAZAPI_ALERT_GROUP_TOKEN
       - UAZAPI_ALERT_GROUP_ID
       - OWNER_NUMBER
+      - PROVIDER_DISPARO
+      - META_PHONE_NUMBER_ID_DISPARO
+      - META_ACCESS_TOKEN_DISPARO
+      - CHATBOT_FORWARD_SECRET
+      - DISPARADOR_AUDIT_URL
     networks:
       - network_public
       - default
