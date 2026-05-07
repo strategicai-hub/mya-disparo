@@ -27,13 +27,24 @@ INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d
 SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
 
+def _skip_weekend(ts: float) -> float:
+    """Se o timestamp cair em sábado (+2d) ou domingo (+1d), avança para segunda-feira."""
+    dt = datetime.fromtimestamp(ts, tz=SAO_PAULO_TZ)
+    wd = dt.weekday()  # 5=sábado, 6=domingo
+    if wd == 5:
+        dt = dt + timedelta(days=2)
+    elif wd == 6:
+        dt = dt + timedelta(days=1)
+    return dt.timestamp()
+
+
 def _next_morning_timestamp() -> float:
-    """Retorna um timestamp aleatório entre 8h e 9h do dia seguinte (horário de SP)."""
+    """Retorna um timestamp aleatório entre 8h e 9h do próximo dia útil (horário de SP)."""
     now = datetime.now(SAO_PAULO_TZ)
     amanha = (now + timedelta(days=1)).replace(
         hour=8, minute=random.randint(0, 59), second=random.randint(0, 59), microsecond=0
     )
-    return amanha.timestamp()
+    return _skip_weekend(amanha.timestamp())
 
 
 def reset_followup_timer(phone_number: str, instance_id):
@@ -166,7 +177,9 @@ def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: st
     intervals = INTERVALS_OWNER if phone_number == OWNER_NUMBER else INTERVALS_NORMAL
 
     t1 = _next_morning_timestamp()
-    timestamps = [t1, t1 + intervals[1] - intervals[0], t1 + intervals[2] - intervals[0]]
+    t2 = _skip_weekend(t1 + intervals[1] - intervals[0])
+    t3 = _skip_weekend(t1 + intervals[2] - intervals[0])
+    timestamps = [t1, t2, t3]
 
     messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
 
