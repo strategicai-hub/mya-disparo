@@ -164,15 +164,19 @@ async def _handle_webhook(instance_id: str, request: Request):
 
                 print(f"=== MENSAGEM RECEBIDA [inst {instance_id}][{phone_number}] ===\nTexto: '{text}'\n============================")
 
+                # Bypass do debounce para o numero do proprietario (testes rapidos)
+                # IMPORTANTE: este bypass deve vir antes de qualquer filtro (ai_blocked, debounce)
+                # para garantir que comandos como /reset sempre cheguem ao worker.
+                if phone_number == OWNER_NUMBER:
+                    print(f"-> Numero do proprietario detectado. Enviando direto sem delay [inst {instance_id}]...")
+                    publish_to_rabbitmq(payload, instance_id)
+                    return {"status": "success", "message": "Webhook recebido"}
+
                 if redis_client and redis_client.exists(f"{prefix}:ai_blocked:{phone_number}"):
                     print(f"[CHATWOOT] IA bloqueada para {phone_number} [inst {instance_id}]. Ignorando mensagem do lead.")
                     return {"status": "success", "message": "IA bloqueada — Chatwoot ativo"}
 
-                # Bypass do debounce para o numero do proprietario (testes rapidos)
-                if phone_number == OWNER_NUMBER:
-                    print(f"-> Numero do proprietario detectado. Enviando direto sem delay [inst {instance_id}]...")
-                    publish_to_rabbitmq(payload, instance_id)
-                elif redis_client:
+                if redis_client:
                     redis_client.rpush(f"{prefix}:burst:{phone_number}", text)
                     redis_client.set(f"{prefix}:burst_time:{phone_number}", time.time())
 
