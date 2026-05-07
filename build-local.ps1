@@ -109,9 +109,13 @@ Start-Sleep -Seconds 15
 
 $containers = Invoke-RestMethod -Uri "$baseUrl/api/endpoints/1/docker/containers/json" -Headers $headers -Method Get
 foreach ($SVC_NAME in $SVC_NAMES) {
-    $c = $containers | Where-Object { $_.Labels."com.docker.swarm.service.name" -eq $SVC_NAME -and $_.Status -match "^Up" }
+    $c = $containers | Where-Object {
+        $labels = $_.Labels
+        $svcLabel = if ($labels.PSObject.Properties["com.docker.swarm.service.name"]) { $labels."com.docker.swarm.service.name" } else { "" }
+        $svcLabel -eq $SVC_NAME -and $_.Status -match "^Up"
+    }
     if ($c) {
-        Write-Host "  OK: $SVC_NAME — $($c.Status)" -ForegroundColor Green
+        Write-Host "  OK: $SVC_NAME - $($c.Status)" -ForegroundColor Green
     } else {
         Write-Host "  AVISO: $SVC_NAME nao encontrado em estado Up" -ForegroundColor Yellow
     }
@@ -120,4 +124,5 @@ foreach ($SVC_NAME in $SVC_NAMES) {
 Write-Host ""
 Write-Host "Deploy concluido!" -ForegroundColor Green
 Write-Host "  Imagem  : $IMAGE_REF"
-Write-Host "  Servicos: $($SVC_NAMES -join ', ')"
+$svcList = $SVC_NAMES -join ", "
+Write-Host "  Servicos: $svcList"
