@@ -323,6 +323,55 @@ async def receive_meta_outbound(instance_id: str, request: Request):
     return {"status": "success"}
 
 
+@app.post("/mya-disparo-uazapi-outbound-{instance_id}")
+async def receive_uazapi_outbound(instance_id: str, request: Request):
+    """Registra disparo outbound da API não oficial (UAZAPI) e agenda follow-ups.
+
+    Chamado pelo disparador-whatsapp após envio bem-sucedido via UAZAPI.
+    Payload: { "to": "5511...", "name": "...", "text": "..." }
+    Auth: x-chatbot-secret
+    """
+    if not CHATBOT_FORWARD_SECRET:
+        raise HTTPException(status_code=503, detail="CHATBOT_FORWARD_SECRET não configurado")
+    if request.headers.get("x-chatbot-secret") != CHATBOT_FORWARD_SECRET:
+        raise HTTPException(status_code=401, detail="secret inválido")
+    if not valid_instance(instance_id):
+        raise HTTPException(status_code=404, detail=f"Instância '{instance_id}' não configurada")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    to_phone = (body.get("to") or "").lstrip("+").split("@")[0]
+    text = body.get("text") or ""
+    name = body.get("name") or ""
+
+    if not to_phone or not text:
+        return {"status": "ignored", "reason": "missing to/text"}
+
+    try:
+        from tools.manage_history import save_message
+        save_message(to_phone, "ai", text, instance_id)
+        print(f"[OUTBOUND UAZAPI] Registrado no histórico de {to_phone}: '{text[:60]}' [inst {instance_id}]")
+    except Exception as e:
+        print(f"[OUTBOUND UAZAPI] Erro ao salvar histórico: {e}")
+
+    # Agenda 3 follow-ups: próxima manhã 8-9h, +3 dias, +7 dias
+    try:
+        from tools.manage_leads import get_lead_info
+        lead_info = get_lead_info(to_phone, instance_id)
+        nome = lead_info.get("nome") or name
+        nicho = lead_info.get("nicho") or ""
+        resumo = lead_info.get("resumo") or ""
+        from tools.manage_followups import schedule_followups
+        schedule_followups(to_phone, instance_id, nome=nome, nicho=nicho, resumo=resumo)
+    except Exception as e:
+        print(f"[OUTBOUND UAZAPI] Erro ao agendar follow-ups: {e}")
+
+    return {"status": "success"}
+
+
 @app.post("/mya-disparo-{instance_id}")
 async def receive_whatsapp_webhook(instance_id: str, request: Request):
     """Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas (roteado por instância)."""
