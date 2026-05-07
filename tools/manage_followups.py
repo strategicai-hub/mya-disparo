@@ -231,6 +231,64 @@ def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str =
     print(f"[FOLLOWUP] 2 follow-ups (meta-outbound) agendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
 
 
+def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
+    """Agenda 2 follow-ups após resposta do lead na API Oficial Meta:
+    - Step 1: em 1 hora
+    - Step 2: amanhã entre 8h-9h (SP)
+
+    Não avança o ciclo (lead está engajado). Cancela follow-ups anteriores e reagenda.
+    Bloqueia se lead tem reunião agendada ou se ciclo > 2.
+    """
+    if not redis_client:
+        return
+
+    from tools.manage_leads import get_lead_info
+    if get_lead_info(phone_number, instance_id).get("event_id"):
+        print(f"[FOLLOWUP] Bloqueado: {phone_number} tem reunião agendada [inst {instance_id}]")
+        return
+
+    cycle = _get_followup_cycle(phone_number, instance_id)
+    if cycle > 2:
+        print(f"[FOLLOWUP] {phone_number} bloqueado permanentemente (ciclo={cycle}) [inst {instance_id}]")
+        return
+
+    cancel_followups(phone_number, instance_id)
+
+    messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
+    steps = messages[:2]  # step 1 (1h) e step 2 (amanhã manhã)
+
+    t1 = time.time() + 3600
+    t2 = _next_morning_timestamp()
+    timestamps = [t1, t2]
+
+    prefix = redis_prefix(instance_id)
+    followups_key = f"{prefix}:followups"
+    for i, msg in enumerate(steps):
+        msg["instance_id"] = str(instance_id)
+        raw = json.dumps(msg, ensure_ascii=False)
+        redis_client.zadd(followups_key, {raw: timestamps[i]})
+        redis_client.sadd(f"{prefix}:followup:members:{phone_number}", raw)
+
+    redis_client.set(f"{prefix}:followup:active:{phone_number}", "1")
+
+    sp = SAO_PAULO_TZ
+    dt1 = datetime.fromtimestamp(t1, tz=sp).strftime("%d/%m %H:%M")
+    dt2 = datetime.fromtimestamp(t2, tz=sp).strftime("%d/%m %H:%M")
+    print(f"[FOLLOWUP] 2 follow-ups (meta-reply) reagendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
+
+
+def permanently_block_followups(phone_number: str, instance_id):
+    """Bloqueia permanentemente follow-ups para um número (lead pediu humano na API Oficial).
+
+    Cancela os follow-ups ativos e seta ciclo=99, impedindo qualquer reagendamento futuro.
+    """
+    if not redis_client:
+        return
+    cancel_followups(phone_number, instance_id)
+    redis_client.set(f"{redis_prefix(instance_id)}:followup:cycle:{phone_number}", 99)
+    print(f"[FOLLOWUP] Bloqueio permanente aplicado para {phone_number} [inst {instance_id}]")
+
+
 def cancel_followups(phone_number: str, instance_id):
     """Remove todos os follow-ups pendentes de um lead."""
     if not redis_client:

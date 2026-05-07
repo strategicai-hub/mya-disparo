@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from config.instances import redis_prefix, OWNER_NUMBER, ALERT_GROUP_ID
+from config.instances import redis_prefix, OWNER_NUMBER, ALERT_GROUP_ID, get_provider
 
 # Ferramentas WAT
 from tools.send_whatsapp import send_message, send_group_alert
@@ -186,7 +186,8 @@ def process_message(msg_payload):
         _save_session_log(phone_number, instance_id)
         return
 
-    log(f"[{phone_number} - {push_name}] [inst {instance_id}] Mensagem: {text_message}")
+    provider = get_provider(instance_id)
+    log(f"[{phone_number} - {push_name}] [inst {instance_id}][{provider}] Mensagem: {text_message}")
 
     # Comando Secreto: Reseta a memória sem precisar de acesso via terminal ao Redis
     if text_message.strip().lower() == "/reset":
@@ -500,9 +501,14 @@ def process_message(msg_payload):
         ok_alerta = send_message(f"{OWNER_NUMBER}@s.whatsapp.net", f"🚨 *MYA DISPARO LEAD ALERTA* 🚨\nInstância: {instance_id}\nLead: {push_name} ({phone_number})\nMotivo: {motivo}", instance_id)
         log(f"[TOOL ALERTA_EQUIPE] Resultado: {'SUCESSO - equipe notificada' if ok_alerta else 'FALHA - Uazapi não entregou o alerta'}")
         resposta_ai = re.sub(r'<ATENDIMENTO_HUMANO>.*?</ATENDIMENTO_HUMANO>', '', resposta_ai, flags=re.IGNORECASE).strip()
-        log(f"[TOOL FOLLOWUP] Executando cancel_followups(telefone={phone_number}) [origem: ATENDIMENTO_HUMANO]")
-        from tools.manage_followups import cancel_followups as cancel_fu
-        cancel_fu(phone_number, instance_id)
+        if provider == "meta":
+            log(f"[TOOL FOLLOWUP] Executando permanently_block_followups(telefone={phone_number}) [origem: ATENDIMENTO_HUMANO/meta]")
+            from tools.manage_followups import permanently_block_followups
+            permanently_block_followups(phone_number, instance_id)
+        else:
+            log(f"[TOOL FOLLOWUP] Executando cancel_followups(telefone={phone_number}) [origem: ATENDIMENTO_HUMANO]")
+            from tools.manage_followups import cancel_followups as cancel_fu
+            cancel_fu(phone_number, instance_id)
         log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - follow-ups cancelados")
 
     # 5. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
@@ -546,9 +552,14 @@ def process_message(msg_payload):
         from tools.manage_followups import cancel_followups as _cancel_safety
         _cancel_safety(phone_number, instance_id)
     elif not match_humano and not evento_criado and not sem_interesse:
-        log(f"[TOOL FOLLOWUP] Executando schedule_followups(telefone={phone_number}, inst={instance_id}, nome={nome_conhecido}, nicho={nicho_conhecido})")
-        from tools.manage_followups import schedule_followups
-        schedule_followups(phone_number, instance_id, nome=nome_conhecido, nicho=nicho_conhecido)
+        if provider == "meta":
+            log(f"[TOOL FOLLOWUP] Executando schedule_meta_reply_followups(telefone={phone_number}, inst={instance_id})")
+            from tools.manage_followups import schedule_meta_reply_followups
+            schedule_meta_reply_followups(phone_number, instance_id, nome=nome_conhecido, nicho=nicho_conhecido, resumo=resumo_conhecido)
+        else:
+            log(f"[TOOL FOLLOWUP] Executando schedule_followups(telefone={phone_number}, inst={instance_id}, nome={nome_conhecido}, nicho={nicho_conhecido})")
+            from tools.manage_followups import schedule_followups
+            schedule_followups(phone_number, instance_id, nome=nome_conhecido, nicho=nicho_conhecido)
         log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - follow-ups agendados/resetados para {phone_number} [inst {instance_id}]")
 
     _save_session_log(phone_number, instance_id)
