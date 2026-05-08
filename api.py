@@ -151,6 +151,12 @@ async def _handle_webhook(instance_id: str, request: Request):
                 if track not in ("n8n", "IA"):
                     raw_chatid = msg.get("chatid", "")
                     lead_phone = raw_chatid.split("@")[0]
+                    # Ignora echo de disparo automatizado (marcado por receive_uazapi_outbound)
+                    skip_key = f"{prefix}:outbound_skip:{lead_phone}"
+                    if lead_phone and redis_client and redis_client.exists(skip_key):
+                        redis_client.delete(skip_key)
+                        print(f"[OUTBOUND] Echo automático ignorado para {lead_phone} [inst {instance_id}]")
+                        return {"status": "success", "message": "Echo outbound ignorado"}
                     if lead_phone and redis_client:
                         redis_client.setex(f"{prefix}:ai_blocked:{lead_phone}", 3600, "manual")
                         print(f"[CHATWOOT] Mensagem manual para {lead_phone} [inst {instance_id}]. IA bloqueada por 1h.")
@@ -356,6 +362,18 @@ async def receive_uazapi_outbound(instance_id: str, request: Request):
         print(f"[OUTBOUND UAZAPI] Registrado no histórico de {to_phone}: '{text[:60]}' [inst {instance_id}]")
     except Exception as e:
         print(f"[OUTBOUND UAZAPI] Erro ao salvar histórico: {e}")
+
+    # Marca skip para ignorar o echo que o UAZAPI/Chatwoot vai reenviar como "fromMe"
+    # cobre tanto a forma com 9 (5561994379262) quanto sem 9 (556194379262)
+    if redis_client:
+        skip_phones = {to_phone}
+        if to_phone.startswith("55") and len(to_phone) == 13:
+            ddd, local = to_phone[2:4], to_phone[4:]
+            if local.startswith("9") and len(local) == 9:
+                skip_phones.add(f"55{ddd}{local[1:]}")
+        prefix = redis_prefix(instance_id)
+        for sp in skip_phones:
+            redis_client.setex(f"{prefix}:outbound_skip:{sp}", 120, "1")
 
     # Agenda 3 follow-ups: próxima manhã 8-9h, +3 dias, +7 dias
     try:
