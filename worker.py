@@ -42,6 +42,35 @@ def _save_session_log(phone_number, instance_id):
         _log_redis.ltrim(key, 0, 499)
     _session_log = []
 
+# Tags de controle que NUNCA podem vazar para o usuário final.
+# Lista usada pelo sanitizador defensivo final antes do envio ao WhatsApp.
+_CONTROL_TAGS = [
+    "IGNORAR_AUTO", "IGNORAR_IA", "SAVE_NAME", "SAVE_NICHO", "SAVE_RESUMO",
+    "LEAD_INTERESSADO", "SEM_INTERESSE", "ATENDIMENTO_HUMANO",
+]
+
+def _strip_control_tags(text: str) -> str:
+    """Última linha de defesa: remove qualquer tag de controle residual antes do envio.
+
+    Cobre:
+    - Pares bem-formados <TAG>...</TAG>
+    - Pares com fechamento mal-formado/typo (ex: <IGNORAR_AUTO>...</IGNOR_AUTO>)
+    - Tags auto-fechadas <TAG/> e tags soltas (abertura ou fechamento)
+    - Qualquer tag XML-like com underscore (padrão das tags do projeto)
+    """
+    if not text:
+        return text
+    for tag in _CONTROL_TAGS:
+        # Par com fechamento exato
+        text = re.sub(rf'<{tag}\b[^>]*>.*?</{tag}\s*>', '', text, flags=re.IGNORECASE | re.DOTALL)
+        # Abertura sem fechamento ou com fechamento mal-formado: corta da abertura até a próxima tag/fim
+        text = re.sub(rf'<{tag}\b[^>]*>.*?(?=<|$)', '', text, flags=re.IGNORECASE | re.DOTALL)
+        # Auto-fechada e fechamento solto
+        text = re.sub(rf'</?{tag}\s*/?>', '', text, flags=re.IGNORECASE)
+    # Defesa genérica: remove qualquer tag XML-like com underscore (formato típico das tags de controle)
+    text = re.sub(r'</?[A-Z][A-Z0-9]*_[A-Z0-9_]+\s*/?>', '', text, flags=re.IGNORECASE)
+    return text.strip()
+
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
@@ -371,18 +400,19 @@ def process_message(msg_payload):
     # ------------------------------------------------------------------------------------------
 
     # 0. Checa MENSAGEM AUTOMATICA (ignora auto-replies detectados pelo LLM)
-    match_auto = re.search(r'<IGNORAR_AUTO>(.*?)</IGNORAR_AUTO>', resposta_ai, re.IGNORECASE)
-    if match_auto:
-        motivo_auto = match_auto.group(1).strip()
+    # Detecção tolerante: basta a tag de abertura — fechamento pode estar mal-formado/ausente (typos do LLM).
+    if re.search(r'<IGNORAR_AUTO\b[^>]*>', resposta_ai, re.IGNORECASE):
+        motivo_match = re.search(r'<IGNORAR_AUTO\b[^>]*>(.*?)(?:</IGNORAR?_AUTO\s*>|<|$)', resposta_ai, re.IGNORECASE | re.DOTALL)
+        motivo_auto = motivo_match.group(1).strip() if motivo_match else ""
         log(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando e mantendo follow-ups.")
         save_message(phone_number, "ai", f"[auto-reply ignorada: {motivo_auto}]", instance_id)
         _save_session_log(phone_number, instance_id)
         return
 
     # 0b. Checa IA DO OUTRO LADO (Mya identificou que o "lead" é outra IA)
-    match_ia = re.search(r'<IGNORAR_IA>(.*?)</IGNORAR_IA>', resposta_ai, re.IGNORECASE)
-    if match_ia:
-        motivo_ia = match_ia.group(1).strip() or "sinais de IA detectados pelo LLM"
+    if re.search(r'<IGNORAR_IA\b[^>]*>', resposta_ai, re.IGNORECASE):
+        motivo_match = re.search(r'<IGNORAR_IA\b[^>]*>(.*?)(?:</IGNORAR?_IA\s*>|<|$)', resposta_ai, re.IGNORECASE | re.DOTALL)
+        motivo_ia = (motivo_match.group(1).strip() if motivo_match else "") or "sinais de IA detectados pelo LLM"
         log(f"[AI_DETECT] LLM detectou IA em {phone_number} [inst {instance_id}]: {motivo_ia}")
         save_message(phone_number, "ai", f"[IA detectada pelo LLM: {motivo_ia}]", instance_id)
         from tools.manage_leads import block_lead_as_ai
@@ -511,7 +541,21 @@ def process_message(msg_payload):
             cancel_fu(phone_number, instance_id)
         log(f"[TOOL FOLLOWUP] Resultado: SUCESSO - follow-ups cancelados")
 
-    # 5. Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
+    # 5. Sanitização defensiva final: remove qualquer tag de controle residual (typos do LLM, tags inventadas).
+    # Última linha de defesa antes de salvar no histórico e enviar ao WhatsApp.
+    resposta_pre_sanitize = resposta_ai
+    resposta_ai = _strip_control_tags(resposta_ai)
+    if resposta_pre_sanitize != resposta_ai:
+        log(f"[SANITIZE] Tag(s) de controle residual(is) removida(s) antes do envio. Antes: {resposta_pre_sanitize[:200]!r}")
+
+    # Se após sanitização não sobrou nada, não envia mensagem vazia ao lead.
+    if not resposta_ai.replace("[PDF_APRESENTACAO]", "").strip():
+        log(f"[SANITIZE] Resposta ficou vazia após remoção de tags. Não enviando nada ao lead.")
+        save_message(phone_number, "ai", "[resposta vazia após sanitização de tags]", instance_id)
+        _save_session_log(phone_number, instance_id)
+        return
+
+    # Salva a resposta gerada inteira (já limpa da tag) no Redis Histórico
     save_message(phone_number, "ai", resposta_ai.replace("[PDF_APRESENTACAO]", "").strip(), instance_id)
 
     # 6. FATIADOR DE MENSAGENS E DELAY HUMANO COORDENADO
