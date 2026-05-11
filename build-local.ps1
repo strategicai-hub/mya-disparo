@@ -33,12 +33,30 @@ $SVC_NAMES = @("mya-disparo_api", "mya-disparo_worker", "mya-disparo_scheduler")
 
 $projectRoot = $PSScriptRoot
 
-# ── Login GHCR via gh CLI ──────────────────────────────────────────────────────
-Write-Host "=== [1/4] Login GHCR (via gh CLI) ===" -ForegroundColor Cyan
-$GHCR_USER  = gh api user --jq ".login"
-$GHCR_TOKEN = gh auth token
-echo $GHCR_TOKEN | docker login ghcr.io -u $GHCR_USER --password-stdin
-Write-Host "Logado como $GHCR_USER" -ForegroundColor Green
+# ── Auth GHCR via DOCKER_CONFIG isolado ────────────────────────────────────────
+# Padrao obrigatorio (~/.claude/CLAUDE.md): nao usar `docker login` (bug
+# "denied: denied" com GHCR) nem so `gh auth token` (gho_* rejeitado no push
+# para packages de organizacao). Usar Classic PAT do ~/.claude/.env via
+# DOCKER_CONFIG inline.
+Write-Host "=== [1/4] Auth GHCR ===" -ForegroundColor Cyan
+$ghStatus = cmd /c "gh auth status --hostname github.com 2>&1" | Out-String
+$ghUserMatch = [regex]::Match($ghStatus, "account\s+(\S+)")
+if (-not $ghUserMatch.Success) { Write-Error "Rode: gh auth login" }
+$GHCR_USER = $ghUserMatch.Groups[1].Value
+if ($env:GHCR_PAT) { $GHCR_TOKEN = $env:GHCR_PAT.Trim() }
+else { $GHCR_TOKEN = (gh auth token --hostname github.com).Trim() }
+if (-not $GHCR_TOKEN) { Write-Error "Defina GHCR_PAT em ~/.claude/.env (Classic PAT com write:packages)" }
+$authB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${GHCR_USER}:${GHCR_TOKEN}"))
+$dockerCfgDir = Join-Path $env:TEMP "mya-disparo-docker-config"
+if (Test-Path $dockerCfgDir) { Remove-Item $dockerCfgDir -Recurse -Force }
+New-Item -ItemType Directory -Path $dockerCfgDir | Out-Null
+$cfgJson = @{ auths = @{ "ghcr.io" = @{ auth = $authB64 } } } | ConvertTo-Json -Depth 5 -Compress
+[IO.File]::WriteAllBytes(
+    (Join-Path $dockerCfgDir "config.json"),
+    [Text.UTF8Encoding]::new($false).GetBytes($cfgJson)
+)
+$env:DOCKER_CONFIG = $dockerCfgDir
+Write-Host "Auth pronto como $GHCR_USER" -ForegroundColor Green
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 Write-Host "=== [2/4] Build + Push ===" -ForegroundColor Cyan
