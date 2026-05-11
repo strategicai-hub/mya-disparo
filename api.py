@@ -147,6 +147,13 @@ async def _handle_webhook(instance_id: str, request: Request):
 
             # Mensagem enviada manualmente (Chatwoot/WhatsApp direto) → bloqueia IA por 1h
             if msg.get("fromMe"):
+                # Echo do disparador-whatsapp identificado por customId — NUNCA bloqueia IA.
+                # Evita race condition em que o relay chega antes do POST /mya-disparo-uazapi-outbound-{id}
+                # ter setado outbound_skip, fazendo o bot achar que é envio manual.
+                custom_id_raw = msg.get("customId") or msg.get("custom_id") or ""
+                if isinstance(custom_id_raw, str) and custom_id_raw.lower() == "disp-campaign":
+                    print(f"[DISP-ECHO] customId=disp-campaign ignorado [inst {instance_id}]")
+                    return {"status": "success", "message": "Echo disparador (customId) ignorado"}
                 track = msg.get("track_source", "")
                 if track not in ("n8n", "IA"):
                     raw_chatid = msg.get("chatid", "")
