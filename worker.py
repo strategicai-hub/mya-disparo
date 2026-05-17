@@ -197,6 +197,57 @@ TOOL_DISPATCH = {
     "reuniao_agendada": None,   # Tratado diretamente no loop
 }
 
+def _check_and_alert_human(phone_number, text_message, instance_id, push_name, nome_conhecido, nicho_conhecido):
+    """Classifica via LLM se a mensagem é humana e, em caso afirmativo, alerta os números configurados.
+    Roda em thread daemon para não bloquear o fluxo principal do worker."""
+    try:
+        from tools.manage_leads import (
+            is_human_alerted, mark_human_alerted, seconds_since_disparo
+        )
+        from tools.human_detector import detect_human
+        from tools.send_whatsapp import send_human_alert
+        from config.instances import HUMAN_ALERT_NUMBERS
+
+        # Double-check: outra thread pode ter alertado nesse meio tempo
+        if is_human_alerted(phone_number, instance_id):
+            return
+
+        elapsed = seconds_since_disparo(phone_number, instance_id)
+        is_human, confianca, motivo = detect_human(text_message, elapsed)
+
+        tempo_str = f"{elapsed:.1f}s" if elapsed is not None else "?"
+        print(f"[HUMAN_ALERT] {phone_number} [inst {instance_id}] → is_human={is_human} conf={confianca} t={tempo_str} motivo={motivo}")
+
+        if not is_human:
+            return
+
+        # Confiança BAIXA não dispara alerta (evita falso positivo)
+        if confianca == "BAIXA":
+            print(f"[HUMAN_ALERT] {phone_number} classificado humano mas confiança BAIXA — não alerta")
+            return
+
+        nome_disp = nome_conhecido or push_name or "(sem nome)"
+        nicho_disp = nicho_conhecido or "(não informado)"
+        texto_alerta = (
+            f"🎯 *HUMANO RESPONDEU AO DISPARO* 🎯\n"
+            f"Instância: {instance_id}\n"
+            f"Lead: {nome_disp}\n"
+            f"Telefone: {phone_number}\n"
+            f"Nicho: {nicho_disp}\n"
+            f"Tempo até resposta: {tempo_str}\n"
+            f"Confiança: {confianca}\n"
+            f"Mensagem do lead: \"{text_message[:300]}\""
+        )
+
+        results = send_human_alert(texto_alerta, HUMAN_ALERT_NUMBERS)
+        ok_count = sum(1 for v in results.values() if v)
+        print(f"[HUMAN_ALERT] Alerta enviado para {ok_count}/{len(results)} destinos: {results}")
+
+        mark_human_alerted(phone_number, instance_id, motivo=f"{confianca}:{motivo[:120]}")
+    except Exception as e:
+        print(f"[HUMAN_ALERT] Erro no check: {e}")
+
+
 def process_message(msg_payload):
     """Recebe os dados do WhatsApp e invoca o Agente LLM baseado no Workflow da Mya."""
     instance_id = str(msg_payload.get("_instance_id", "")).strip()
@@ -423,6 +474,20 @@ def process_message(msg_payload):
     # Mensagem humana confirmada → reseta timer de follow-ups
     from tools.manage_followups import reset_followup_timer
     reset_followup_timer(phone_number, instance_id)
+
+    # Alerta "humano respondeu" — só na 1ª resposta humana confirmada do lead.
+    # Roda em thread daemon para não bloquear a resposta da Mya ao lead.
+    try:
+        from tools.manage_leads import is_human_alerted
+        if not is_human_alerted(phone_number, instance_id):
+            import threading
+            threading.Thread(
+                target=_check_and_alert_human,
+                args=(phone_number, text_message, instance_id, push_name, nome_conhecido, nicho_conhecido),
+                daemon=True,
+            ).start()
+    except Exception as e:
+        log(f"[HUMAN_ALERT] Falha ao acionar check (não crítico): {e}")
 
     # 1. Checa NOME (via tag XML → fallback padrão 'Muito prazer' → fallback histórico)
     match = re.search(r'<SAVE_NAME>(.*?)</SAVE_NAME>', resposta_ai, re.IGNORECASE)

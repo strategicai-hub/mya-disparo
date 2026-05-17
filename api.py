@@ -130,6 +130,11 @@ async def _handle_webhook(instance_id: str, request: Request):
                             from tools.manage_history import save_message
                             save_message(lead_phone, "ai", texto_disparo, instance_id)
                             print(f"[DISPARO] Mensagem salva no histórico de {lead_phone} [inst {instance_id}]")
+                        try:
+                            from tools.manage_leads import mark_disparo_sent_now
+                            mark_disparo_sent_now(lead_phone, instance_id)
+                        except Exception as e:
+                            print(f"[DISPARO] Erro ao marcar timestamp do disparo: {e}")
                         except Exception as e:
                             print(f"[DISPARO] Erro ao salvar no histórico: {e}")
                     try:
@@ -321,6 +326,12 @@ async def receive_meta_outbound(instance_id: str, request: Request):
     except Exception as e:
         print(f"[OUTBOUND] Erro ao salvar histórico: {e}")
 
+    try:
+        from tools.manage_leads import mark_disparo_sent_now
+        mark_disparo_sent_now(to_phone, instance_id)
+    except Exception as e:
+        print(f"[OUTBOUND] Erro ao marcar timestamp do disparo: {e}")
+
     # Agenda 2 follow-ups: 1h + amanhã 8-9h
     try:
         from tools.manage_leads import get_lead_info
@@ -369,6 +380,12 @@ async def receive_uazapi_outbound(instance_id: str, request: Request):
         print(f"[OUTBOUND UAZAPI] Registrado no histórico de {to_phone}: '{text[:60]}' [inst {instance_id}]")
     except Exception as e:
         print(f"[OUTBOUND UAZAPI] Erro ao salvar histórico: {e}")
+
+    try:
+        from tools.manage_leads import mark_disparo_sent_now
+        mark_disparo_sent_now(to_phone, instance_id)
+    except Exception as e:
+        print(f"[OUTBOUND UAZAPI] Erro ao marcar timestamp do disparo: {e}")
 
     # Marca skip para ignorar o echo que o UAZAPI/Chatwoot vai reenviar como "fromMe"
     # cobre tanto a forma com 9 (5561994379262) quanto sem 9 (556194379262)

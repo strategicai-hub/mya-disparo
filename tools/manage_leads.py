@@ -59,6 +59,51 @@ AI_BLOCK_TTL_SECONDS = 60 * 60 * 24 * 365
 # TTL do timestamp "ultima msg da Mya": 24h (heurística de bot por tempo de resposta)
 LAST_AI_SENT_TTL_SECONDS = 60 * 60 * 24
 
+# TTL do timestamp do disparo (entre disparo e 1ª resposta do lead): 30 dias
+DISPARO_TS_TTL_SECONDS = 60 * 60 * 24 * 30
+
+# TTL da flag "humano já foi alertado para este lead": 90 dias
+HUMAN_ALERTED_TTL_SECONDS = 60 * 60 * 24 * 90
+
+
+def mark_disparo_sent_now(phone_number: str, instance_id) -> None:
+    """Registra o instante em que o disparo foi enviado ao lead.
+    Usado para calcular o tempo até a 1ª resposta (sinal de humano vs bot)."""
+    if not redis_client:
+        return
+    key = f"{redis_prefix(instance_id)}:disparo_ts:{phone_number}"
+    # setnx: só grava se não existir — preserva o timestamp do PRIMEIRO disparo
+    if not redis_client.exists(key):
+        redis_client.setex(key, DISPARO_TS_TTL_SECONDS, str(time.time()))
+
+
+def seconds_since_disparo(phone_number: str, instance_id):
+    """Retorna segundos desde o disparo inicial ao lead, ou None se desconhecido."""
+    if not redis_client:
+        return None
+    key = f"{redis_prefix(instance_id)}:disparo_ts:{phone_number}"
+    raw = redis_client.get(key)
+    if not raw:
+        return None
+    try:
+        return time.time() - float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_human_alerted(phone_number: str, instance_id) -> bool:
+    if not redis_client:
+        return False
+    key = f"{redis_prefix(instance_id)}:human_alerted:{phone_number}"
+    return redis_client.exists(key) == 1
+
+
+def mark_human_alerted(phone_number: str, instance_id, motivo: str = "") -> None:
+    if not redis_client:
+        return
+    key = f"{redis_prefix(instance_id)}:human_alerted:{phone_number}"
+    redis_client.setex(key, HUMAN_ALERTED_TTL_SECONDS, motivo[:200] or "1")
+
 
 def mark_ai_sent_now(phone_number: str, instance_id) -> None:
     """Marca agora como instante em que a Mya enviou mensagem ao lead."""

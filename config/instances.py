@@ -37,6 +37,13 @@ ALERT_GROUP_ID = os.getenv("UAZAPI_ALERT_GROUP_ID", "120363402718927307@g.us")
 
 OWNER_NUMBER = os.getenv("OWNER_NUMBER", "5511989887525")
 
+# Números que recebem o alerta "humano respondeu ao disparo" (1ª resposta humana).
+# Enviado pelo ALERT_GROUP_TOKEN (número separado dos disparos, não bloqueia).
+HUMAN_ALERT_NUMBERS = [
+    n.strip() for n in os.getenv("HUMAN_ALERT_NUMBERS", "5511989887525,554188468372").split(",")
+    if n.strip()
+]
+
 
 def get_provider(instance_id) -> str:
     cfg = INSTANCES.get(str(instance_id))

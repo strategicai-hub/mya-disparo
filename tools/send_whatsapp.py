@@ -1,7 +1,7 @@
 import requests
 from dotenv import load_dotenv
 
-from config.instances import UAZAPI_URL, get_token, get_provider, ALERT_GROUP_TOKEN, ALERT_GROUP_ID
+from config.instances import UAZAPI_URL, get_token, get_provider, ALERT_GROUP_TOKEN, ALERT_GROUP_ID, HUMAN_ALERT_NUMBERS
 from providers import meta as meta_provider
 
 load_dotenv()
@@ -68,3 +68,41 @@ def send_group_alert(text: str, group_id: str = ALERT_GROUP_ID) -> bool:
     except requests.exceptions.RequestException as e:
         print(f"Erro ao enviar alerta de grupo: {e}")
         return False
+
+
+def send_human_alert(text: str, numbers: list[str] | None = None) -> dict:
+    """Envia o alerta de 'humano respondeu' para uma lista de números.
+
+    Usa o ALERT_GROUP_TOKEN (número dedicado, separado das instâncias de disparo)
+    para que o bloqueio frequente dos números de disparo não impeça o alerta.
+
+    Retorna dict {numero: bool} indicando sucesso de cada envio.
+    """
+    targets = numbers if numbers is not None else HUMAN_ALERT_NUMBERS
+    results = {}
+
+    if not ALERT_GROUP_TOKEN:
+        print("[HUMAN_ALERT] UAZAPI_ALERT_GROUP_TOKEN não configurado — alerta não enviado")
+        return {n: False for n in targets}
+
+    endpoint = f"{UAZAPI_URL}/send/text"
+    headers = {"token": ALERT_GROUP_TOKEN, "Content-Type": "application/json"}
+
+    for number in targets:
+        if not number:
+            continue
+        payload = {
+            "number": number,
+            "text": text,
+            "delay": 0,
+            "track_source": "IA_alert",
+        }
+        try:
+            r = requests.post(endpoint, json=payload, headers=headers, timeout=15)
+            r.raise_for_status()
+            results[number] = r.status_code in [200, 201]
+        except requests.exceptions.RequestException as e:
+            print(f"[HUMAN_ALERT] Falha ao enviar para {number}: {e}")
+            results[number] = False
+
+    return results
