@@ -19,3 +19,6 @@ redis
 gspread
 google-auth
 google-api-python-client
+
+# Acesso direto ao DB do SAI Comercial (para scripts utilitários, ex: bulk_followup_today)
+psycopg2-binary

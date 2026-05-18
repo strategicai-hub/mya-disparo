@@ -21,8 +21,18 @@ except Exception as e:
 FOLLOWUP_IMAGE_URL = "https://webhook-whatsapp.strategicai.com.br/mya-disparo/resultado"
 
 # Intervalos em segundos
-INTERVALS_NORMAL = [86400, 259200, 604800]    # 1d, 3d, 7d
-INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d
+INTERVALS_NORMAL = [86400, 259200, 604800]    # 1d, 3d, 7d (UAZAPI legacy)
+INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d (UAZAPI legacy)
+
+# Meta API Oficial: 1h (follow-up contextual via LLM) e 4h (mensagem de encerramento)
+META_FOLLOWUP_DELAYS = [3600, 14400]
+
+CLOSURE_MESSAGE_VARIANTS = [
+    "Sem problemas! Entendo que esse não é o melhor momento. Vou parar por aqui pra não te incomodar. Quando fizer sentido, é só me chamar — fico à disposição!",
+    "Tudo bem! Imagino que o timing agora não esteja ideal. Vou encerrar por aqui pra não te atrapalhar. Se um dia quiser conversar sobre IA no seu negócio, é só mandar oi.",
+    "Sem stress! Vejo que talvez agora não seja a hora certa. Vou parar de te chamar pra não incomodar. Qualquer coisa no futuro, meu contato fica salvo aqui. Sucesso!",
+    "Tranquilo! Percebo que esse momento não é o melhor pra você. Vou recolher por aqui pra não atrapalhar sua rotina. Quando fizer sentido, me chama!",
+]
 
 SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
@@ -54,6 +64,30 @@ def _next_morning_timestamp() -> float:
     return _skip_weekend(amanha.timestamp())
 
 
+def mark_closure_sent(phone_number: str, instance_id) -> None:
+    """Marca que o follow-up de encerramento (4h) já foi enviado.
+
+    Depois disso, nenhum follow-up é reagendado para esse lead até
+    haver um novo disparo (que zera o estado via reset_followup_cycle ou
+    o operador resetar manualmente).
+    """
+    if not redis_client:
+        return
+    redis_client.set(f"{redis_prefix(instance_id)}:followup:closure_sent:{phone_number}", "1")
+
+
+def is_closure_sent(phone_number: str, instance_id) -> bool:
+    if not redis_client:
+        return False
+    return redis_client.exists(f"{redis_prefix(instance_id)}:followup:closure_sent:{phone_number}") == 1
+
+
+def clear_closure_flag(phone_number: str, instance_id) -> None:
+    if not redis_client:
+        return
+    redis_client.delete(f"{redis_prefix(instance_id)}:followup:closure_sent:{phone_number}")
+
+
 def reset_followup_timer(phone_number: str, instance_id):
     """Reseta o timer dos follow-ups — cancela os antigos e zera o ciclo (lead respondeu)."""
     if not redis_client:
@@ -69,6 +103,7 @@ def reset_followup_cycle(phone_number: str, instance_id):
         return
     cancel_followups(phone_number, instance_id)
     redis_client.delete(f"{redis_prefix(instance_id)}:followup:cycle:{phone_number}")
+    clear_closure_flag(phone_number, instance_id)
     print(f"[FOLLOWUP] Ciclo zerado para {phone_number} [inst {instance_id}]")
 
 
@@ -204,12 +239,45 @@ def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: st
     print(f"[FOLLOWUP] 3 follow-ups agendados para {phone_number} [inst {instance_id}]")
 
 
+def _build_meta_followup_steps(phone_number: str, nome: str, nicho: str, resumo: str) -> list:
+    """Monta os 2 steps da sequência Meta API Oficial:
+    - step 1 (+1h): mensagem contextual gerada por LLM no momento do envio
+      (scheduler.py chama tools.followup_llm para gerar o texto).
+    - step 2 (+4h): mensagem fixa de encerramento.
+    """
+    return [
+        {
+            "phone": phone_number,
+            "step": 1,
+            "type": "text",
+            "use_llm": True,
+            "context": {
+                "nome": nome or "",
+                "nicho": nicho or "",
+                "resumo": resumo or "",
+            },
+            "fallback": (
+                f"Oi {nome}, " if nome else "Oi, "
+            ) + "imagino que seu dia esteja corrido. Conseguiu dar uma olhada na mensagem que te mandei?",
+        },
+        {
+            "phone": phone_number,
+            "step": 2,
+            "type": "text",
+            "closure": True,
+            "message": random.choice(CLOSURE_MESSAGE_VARIANTS),
+        },
+    ]
+
+
 def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
     """Agenda 2 follow-ups após disparo outbound via API Oficial Meta:
-    - Step 1: em 1 hora
-    - Step 2: amanhã entre 8h-9h (SP)
+    - Step 1 (+1h): mensagem contextual via LLM com o histórico da conversa.
+    - Step 2 (+4h): mensagem de encerramento ("não é o momento, vou parar").
 
-    Não sobrescreve follow-ups já ativos. Bloqueia se lead tem reunião agendada.
+    Regras:
+    - Bloqueia se lead tem reunião agendada (event_id) ou se closure já foi enviado.
+    - Não sobrescreve follow-ups já ativos (no-op idempotente).
     """
     if not redis_client:
         return
@@ -217,23 +285,20 @@ def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str =
     from tools.manage_leads import get_lead_info
     if get_lead_info(phone_number, instance_id).get("event_id"):
         print(f"[FOLLOWUP] Bloqueado: {phone_number} tem reunião agendada [inst {instance_id}]")
+        return
+
+    if is_closure_sent(phone_number, instance_id):
+        print(f"[FOLLOWUP] Bloqueado: closure já enviado para {phone_number} [inst {instance_id}]")
         return
 
     if has_active_followups(phone_number, instance_id):
         print(f"[FOLLOWUP] {phone_number} já tem follow-ups ativos — não sobrescrevendo [inst {instance_id}]")
         return
 
-    cycle = _advance_followup_cycle(phone_number, instance_id)
-    if cycle > 2:
-        print(f"[FOLLOWUP] Lead {phone_number} já passou por todos os ciclos. Não reagendando.")
-        return
+    steps = _build_meta_followup_steps(phone_number, nome, nicho, resumo)
 
-    messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
-    steps = messages[:2]  # apenas step 1 (1h) e step 2 (amanhã manhã)
-
-    t1 = time.time() + 3600          # 1 hora a partir de agora
-    t2 = _next_morning_timestamp()   # amanhã entre 8h-9h SP
-    timestamps = [t1, t2]
+    now = time.time()
+    timestamps = [now + d for d in META_FOLLOWUP_DELAYS]
 
     prefix = redis_prefix(instance_id)
     followups_key = f"{prefix}:followups"
@@ -246,18 +311,19 @@ def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str =
     redis_client.set(f"{prefix}:followup:active:{phone_number}", "1")
 
     sp = SAO_PAULO_TZ
-    dt1 = datetime.fromtimestamp(t1, tz=sp).strftime("%d/%m %H:%M")
-    dt2 = datetime.fromtimestamp(t2, tz=sp).strftime("%d/%m %H:%M")
-    print(f"[FOLLOWUP] 2 follow-ups (meta-outbound) agendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
+    dt1 = datetime.fromtimestamp(timestamps[0], tz=sp).strftime("%d/%m %H:%M")
+    dt2 = datetime.fromtimestamp(timestamps[1], tz=sp).strftime("%d/%m %H:%M")
+    print(f"[FOLLOWUP] 2 follow-ups (meta-outbound 1h/4h) agendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
 
 
 def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
-    """Agenda 2 follow-ups após resposta do lead na API Oficial Meta:
-    - Step 1: em 1 hora
-    - Step 2: amanhã entre 8h-9h (SP)
+    """Reagenda 2 follow-ups após cada resposta do lead na API Oficial Meta:
+    - Step 1 (+1h a partir de agora): contextual via LLM.
+    - Step 2 (+4h a partir de agora): mensagem de encerramento.
 
-    Não avança o ciclo (lead está engajado). Cancela follow-ups anteriores e reagenda.
-    Bloqueia se lead tem reunião agendada ou se ciclo > 2.
+    Cancela follow-ups anteriores e reseta o timer.
+    Bloqueia se lead tem reunião agendada ou se closure já foi enviado.
+    Sem cycle cap: enquanto o lead engaja, o follow-up segue ativo.
     """
     if not redis_client:
         return
@@ -267,19 +333,16 @@ def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = ""
         print(f"[FOLLOWUP] Bloqueado: {phone_number} tem reunião agendada [inst {instance_id}]")
         return
 
-    cycle = _get_followup_cycle(phone_number, instance_id)
-    if cycle > 2:
-        print(f"[FOLLOWUP] {phone_number} bloqueado permanentemente (ciclo={cycle}) [inst {instance_id}]")
+    if is_closure_sent(phone_number, instance_id):
+        print(f"[FOLLOWUP] Bloqueado: closure já enviado para {phone_number} [inst {instance_id}]")
         return
 
     cancel_followups(phone_number, instance_id)
 
-    messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
-    steps = messages[:2]  # step 1 (1h) e step 2 (amanhã manhã)
+    steps = _build_meta_followup_steps(phone_number, nome, nicho, resumo)
 
-    t1 = time.time() + 3600
-    t2 = _next_morning_timestamp()
-    timestamps = [t1, t2]
+    now = time.time()
+    timestamps = [now + d for d in META_FOLLOWUP_DELAYS]
 
     prefix = redis_prefix(instance_id)
     followups_key = f"{prefix}:followups"
@@ -292,9 +355,9 @@ def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = ""
     redis_client.set(f"{prefix}:followup:active:{phone_number}", "1")
 
     sp = SAO_PAULO_TZ
-    dt1 = datetime.fromtimestamp(t1, tz=sp).strftime("%d/%m %H:%M")
-    dt2 = datetime.fromtimestamp(t2, tz=sp).strftime("%d/%m %H:%M")
-    print(f"[FOLLOWUP] 2 follow-ups (meta-reply) reagendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
+    dt1 = datetime.fromtimestamp(timestamps[0], tz=sp).strftime("%d/%m %H:%M")
+    dt2 = datetime.fromtimestamp(timestamps[1], tz=sp).strftime("%d/%m %H:%M")
+    print(f"[FOLLOWUP] 2 follow-ups (meta-reply 1h/4h) reagendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
 
 
 def permanently_block_followups(phone_number: str, instance_id):

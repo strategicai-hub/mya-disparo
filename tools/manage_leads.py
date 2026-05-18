@@ -83,6 +83,30 @@ def mark_disparo_sent_now(phone_number: str, instance_id) -> None:
         redis_client.setex(key, DISPARO_TS_TTL_SECONDS, str(time.time()))
 
 
+def mark_outbound_sent_now(phone_number: str, instance_id) -> None:
+    """Registra o instante do último outbound enviado ao lead (qualquer tipo).
+    Usado pela janela mínima de 30s no webhook Meta para descartar auto-respostas
+    quase instantâneas como inbound real."""
+    if not redis_client:
+        return
+    key = f"{redis_prefix(instance_id)}:last_outbound_ts:{phone_number}"
+    redis_client.setex(key, DISPARO_TS_TTL_SECONDS, str(time.time()))
+
+
+def seconds_since_last_outbound(phone_number: str, instance_id):
+    """Retorna segundos desde o último outbound ao lead, ou None se desconhecido."""
+    if not redis_client:
+        return None
+    key = f"{redis_prefix(instance_id)}:last_outbound_ts:{phone_number}"
+    raw = redis_client.get(key)
+    if not raw:
+        return None
+    try:
+        return time.time() - float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def seconds_since_disparo(phone_number: str, instance_id):
     """Retorna segundos desde o disparo inicial ao lead, ou None se desconhecido."""
     if not redis_client:

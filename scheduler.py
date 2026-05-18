@@ -7,13 +7,14 @@ load_dotenv()
 
 from tools.manage_followups import (
     get_due_followups, remove_followup, reschedule_followup,
-    has_active_followups, get_all_instance_ids,
+    has_active_followups, get_all_instance_ids, mark_closure_sent,
 )
 from config.instances import OWNER_NUMBER
 from tools.send_whatsapp import send_message
 from tools.send_media import send_image
 from tools.manage_history import save_message
-from tools.manage_leads import mark_ai_sent_now
+from tools.manage_leads import mark_ai_sent_now, get_lead_info
+from tools.followup_llm import generate_followup_text
 
 SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
@@ -96,11 +97,30 @@ def process_due_followups_for_instance(instance_id: str):
                 mark_ai_sent_now(phone, item_instance)
             print(f"[SCHEDULER inst {item_instance}] Step {step} (imagem) para {phone}: {'OK' if success else 'FALHA'}")
         else:
-            message = item.get("message", "")
+            # Para o step 1 da sequência Meta (use_llm), gera o texto contextual agora
+            if item.get("use_llm"):
+                ctx = item.get("context") or {}
+                lead = get_lead_info(phone, item_instance) or {}
+                nome = lead.get("nome") or ctx.get("nome") or ""
+                nicho = lead.get("nicho") or ctx.get("nicho") or ""
+                resumo = lead.get("resumo") or ctx.get("resumo") or ""
+                message = generate_followup_text(
+                    phone, item_instance,
+                    nome=nome, nicho=nicho, resumo=resumo,
+                    fallback=item.get("fallback") or "",
+                )
+                print(f"[SCHEDULER inst {item_instance}] Step {step} (LLM) gerou para {phone}: {message[:80]!r}")
+            else:
+                message = item.get("message", "")
+
             success = send_message(whatsapp_id, message, item_instance)
             if success:
                 save_message(phone, "ai", message, item_instance)
                 mark_ai_sent_now(phone, item_instance)
+                # Step 2 com closure=True → marca o lead como encerrado: sem mais follow-ups
+                if item.get("closure"):
+                    mark_closure_sent(phone, item_instance)
+                    print(f"[SCHEDULER inst {item_instance}] Closure enviado para {phone} — sem mais follow-ups até reset.")
             print(f"[SCHEDULER inst {item_instance}] Step {step} (texto) para {phone}: {'OK' if success else 'FALHA'}")
 
         remove_followup(raw, phone, item_instance)

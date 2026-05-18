@@ -273,6 +273,18 @@ async def receive_meta_forward(instance_id: str, request: Request):
         print(f"[CHATWOOT] IA bloqueada para {from_phone} [inst {instance_id}] (Meta forward). Ignorando.")
         return {"status": "ignored", "reason": "ai blocked"}
 
+    # Janela mínima de "reply válido": inbound em menos de 30s após o último
+    # outbound nosso é tratado como auto-resposta. Não publica na fila e
+    # NÃO reseta os follow-ups já agendados.
+    try:
+        from tools.manage_leads import seconds_since_last_outbound
+        elapsed_out = seconds_since_last_outbound(from_phone, instance_id)
+        if elapsed_out is not None and elapsed_out < 30:
+            print(f"[AUTO_GUARD] Inbound {elapsed_out:.1f}s após outbound — tratado como auto-resposta [inst {instance_id}][{from_phone}]. Texto: {text[:80]!r}")
+            return {"status": "ignored", "reason": "auto-reply window (<30s)"}
+    except Exception as e:
+        print(f"[AUTO_GUARD] Falha no check de janela (não crítico): {e}")
+
     print(f"=== MENSAGEM RECEBIDA META [inst {instance_id}][{from_phone}] ===\nTexto: '{text}'\n============================")
 
     if from_phone == OWNER_NUMBER:
@@ -327,12 +339,13 @@ async def receive_meta_outbound(instance_id: str, request: Request):
         print(f"[OUTBOUND] Erro ao salvar histórico: {e}")
 
     try:
-        from tools.manage_leads import mark_disparo_sent_now
+        from tools.manage_leads import mark_disparo_sent_now, mark_outbound_sent_now
         mark_disparo_sent_now(to_phone, instance_id)
+        mark_outbound_sent_now(to_phone, instance_id)
     except Exception as e:
         print(f"[OUTBOUND] Erro ao marcar timestamp do disparo: {e}")
 
-    # Agenda 2 follow-ups: 1h + amanhã 8-9h
+    # Agenda 2 follow-ups: +1h (contextual via LLM) e +4h (closure)
     try:
         from tools.manage_leads import get_lead_info
         lead_info = get_lead_info(to_phone, instance_id)
