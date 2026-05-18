@@ -33,6 +33,27 @@ _PHRASE_PATTERNS = [
     r"\b(direciona(do|ndo)|transferi(do|ndo)|encaminha(do|ndo)) (para|ao|à) (uma de )?(nossa|nossas) equipe\b",
     r"\b(um|uma) (de )?nossos? (atendentes?|agentes?|especialistas?|colaboradores?)\b.{0,40}\b(vai|ir(á|a)|entrar(á|a)?) (em contato|te atender|falar com)",
     r"\baguarde(,)? (um momento|um instante|por favor)\b",
+    # Padroes capturados de SDR/atendente de outra empresa (ex: caso Dani/Arena Fitness)
+    # Auto-apresentacao corporativa com cargo: "Sou a Dani, do time comercial da Arena Fitness"
+    r"\bsou (o|a) \w+,?\s+(do|da)\s+(time|setor|equipe|departamento|atendimento|area)\s+(comercial|de vendas|de atendimento|de relacionamento|administrativ[oa])\b",
+    # Frase institucional: "nosso foco aqui é garantir / atender / oferecer"
+    r"\bnosso foco (aqui )?(é|e) (garantir|atender|oferecer|prestar|proporcionar)\b",
+    # "este canal é exclusivo para vendas e informações"
+    r"\b(este|esse) canal (é|e) (exclusivo|destinado|reservado|dedicado) (para|a)\b",
+    # Linguagem corporativa formal: "sigo processos internos"
+    r"\bsigo processos internos\b",
+    # Auto-referência formal: "como informei", "como já mencionei anteriormente"
+    r"\bcomo (já )?(informei|mencionei|disse|expliquei|comuniquei)( anteriormente| antes)?\b",
+    # Pergunta scripted: "gostaria que eu te enviasse/mandasse os valores/o material"
+    r"\bgostaria que eu (te |lhe )?(envias?se|mandass?e|apresentas?se|passas?se|disponibilizas?se)\b",
+    # Estrutura condicional formal: "caso você tenha interesse em ..., posso te apresentar"
+    r"\bcaso (você|vc|o senhor|a senhora) (tenha|tiver) interesse em\b.{0,80}\bposso (te |lhe )?(apresentar|enviar|mostrar|passar)\b",
+    # Pergunta de qualificacao tipica de SDR-bot: "qual o seu objetivo com os treinos / com a contratacao"
+    r"\bqual (o seu|seu|o) objetivo (com|na|nos|no|na sua)\b",
+    # "agradeço o contato, mas no momento meu foco é..."
+    r"\bagradeço (o|seu) contato,?\s*mas\s+no momento\b",
+    # Pergunta dupla de qualificacao em uma unica msg ("Você já é X ou gostaria de Y")
+    r"\bvocê já (é|tem|conhece|utiliza)\b.{0,80}\bou gostaria (de|que)\b",
 ]
 
 _PHRASE_RES = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in _PHRASE_PATTERNS]
