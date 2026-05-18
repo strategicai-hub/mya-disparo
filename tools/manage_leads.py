@@ -53,8 +53,14 @@ def clear_lead_info(phone_number: str, instance_id):
         print(f"[CRM] ⚠️ Nenhuma chave encontrada para deletar: {key}")
 
 
-# TTL do bloqueio por suspeita de IA: 1 ano
-AI_BLOCK_TTL_SECONDS = 60 * 60 * 24 * 365
+# TTL do bloqueio por suspeita de IA: 24 horas (mantém follow-ups cancelados,
+# mas libera o lead para conversar normalmente no dia seguinte se for humano).
+AI_BLOCK_TTL_SECONDS = 60 * 60 * 24
+
+# Contador de sinais de IA por lead (heurística + tag <IGNORAR_IA>):
+# só bloqueia o lead quando atingir AI_SIGNAL_BLOCK_THRESHOLD sinais distintos.
+AI_SIGNAL_TTL_SECONDS = 60 * 60 * 24 * 7    # 7 dias de janela acumulativa
+AI_SIGNAL_BLOCK_THRESHOLD = 4               # 4 mensagens do lead confirmadas como IA
 
 # TTL do timestamp "ultima msg da Mya": 24h (heurística de bot por tempo de resposta)
 LAST_AI_SENT_TTL_SECONDS = 60 * 60 * 24
@@ -127,6 +133,46 @@ def seconds_since_last_ai_msg(phone_number: str, instance_id):
         return None
 
 
+def register_ai_signal(phone_number: str, motivo: str, instance_id) -> int:
+    """Incrementa o contador de sinais de IA do lead e retorna o total atual.
+
+    Janela de 7 dias. Usado pelo worker para decidir se deve bloquear
+    (só bloqueia quando contador >= AI_SIGNAL_BLOCK_THRESHOLD).
+    """
+    if not redis_client:
+        return 0
+    key = f"{redis_prefix(instance_id)}:ai_signals:{phone_number}"
+    pipe = redis_client.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, AI_SIGNAL_TTL_SECONDS)
+    pipe.rpush(f"{key}:motivos", motivo[:200])
+    pipe.expire(f"{key}:motivos", AI_SIGNAL_TTL_SECONDS)
+    pipe.ltrim(f"{key}:motivos", -10, -1)
+    results = pipe.execute()
+    return int(results[0]) if results else 0
+
+
+def get_ai_signal_count(phone_number: str, instance_id) -> int:
+    """Retorna o contador atual de sinais de IA (0 se nenhum)."""
+    if not redis_client:
+        return 0
+    key = f"{redis_prefix(instance_id)}:ai_signals:{phone_number}"
+    raw = redis_client.get(key)
+    try:
+        return int(raw) if raw else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def clear_ai_signals(phone_number: str, instance_id) -> None:
+    """Zera os sinais de IA (usado quando a Mya confirma resposta humana)."""
+    if not redis_client:
+        return
+    prefix = redis_prefix(instance_id)
+    redis_client.delete(f"{prefix}:ai_signals:{phone_number}")
+    redis_client.delete(f"{prefix}:ai_signals:{phone_number}:motivos")
+
+
 def block_lead_as_ai(phone_number: str, motivo: str, instance_id) -> bool:
     """
     Bloqueia um numero por suspeita de ser IA: marca ai_blocked (1 ano),
@@ -183,7 +229,7 @@ def block_lead_as_ai(phone_number: str, motivo: str, instance_id) -> bool:
             f"Número: {phone_number}\n"
             f"Nome: {nome or '(desconhecido)'}\n"
             f"Motivo: {motivo}\n"
-            f"Ações: IA bloqueada por 1 ano, follow-ups cancelados.{evento_info}"
+            f"Ações: IA bloqueada por 24h, follow-ups cancelados.{evento_info}"
         )
         send_message(f"{OWNER_NUMBER}@s.whatsapp.net", texto, instance_id)
         print(f"[AI_BLOCK] Equipe alertada para {phone_number}")

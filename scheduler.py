@@ -1,4 +1,5 @@
 import time
+import random
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -23,13 +24,29 @@ def is_business_hours() -> bool:
     return 8 <= now.hour < 19
 
 
-def next_business_morning() -> float:
-    """Retorna timestamp da próxima manhã às 8h (São Paulo)."""
+def next_business_slot() -> float:
+    """Retorna timestamp aleatório no próximo período útil (8h-18h, São Paulo).
+
+    Espalha follow-ups que caíram fora do horário comercial ao longo de todo
+    o expediente do dia útil seguinte (ou do próprio dia, se ainda for cedo),
+    evitando concentração na primeira hora — risco de bloqueio pela Meta.
+    """
     now = datetime.now(SAO_PAULO_TZ)
     if now.hour < 8:
-        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        base = now.replace(hour=0, minute=0, second=0, microsecond=0)
     else:
-        target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+        base = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    target = base.replace(
+        hour=random.randint(8, 17),
+        minute=random.randint(0, 59),
+        second=random.randint(0, 59),
+    )
+    # Pula fim de semana
+    wd = target.weekday()
+    if wd == 5:
+        target = target + timedelta(days=2)
+    elif wd == 6:
+        target = target + timedelta(days=1)
     return target.timestamp()
 
 
@@ -56,9 +73,10 @@ def process_due_followups_for_instance(instance_id: str):
 
         # Horário comercial (pula check para owner)
         if phone != OWNER_NUMBER and not is_business_hours():
-            new_time = next_business_morning()
+            new_time = next_business_slot()
             reschedule_followup(raw, new_time, item_instance)
-            print(f"[SCHEDULER inst {item_instance}] Step {step} de {phone} reagendado para próxima manhã 8h")
+            new_dt = datetime.fromtimestamp(new_time, tz=SAO_PAULO_TZ).strftime("%d/%m %H:%M")
+            print(f"[SCHEDULER inst {item_instance}] Step {step} de {phone} reagendado para {new_dt} (slot aleatório no expediente)")
             continue
 
         # Envia conforme tipo

@@ -39,10 +39,17 @@ def _skip_weekend(ts: float) -> float:
 
 
 def _next_morning_timestamp() -> float:
-    """Retorna um timestamp aleatório entre 8h e 9h do próximo dia útil (horário de SP)."""
+    """Retorna um timestamp aleatório dentro do dia útil seguinte (8h-18h, horário de SP).
+
+    Distribui ao longo de todo o expediente para evitar rajada de follow-ups
+    concentrada em 8h-9h (risco de bloqueio pela Meta em chip de disparo).
+    """
     now = datetime.now(SAO_PAULO_TZ)
     amanha = (now + timedelta(days=1)).replace(
-        hour=8, minute=random.randint(0, 59), second=random.randint(0, 59), microsecond=0
+        hour=random.randint(8, 17),
+        minute=random.randint(0, 59),
+        second=random.randint(0, 59),
+        microsecond=0,
     )
     return _skip_weekend(amanha.timestamp())
 

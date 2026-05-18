@@ -71,6 +71,22 @@ def _strip_control_tags(text: str) -> str:
     text = re.sub(r'</?[A-Z][A-Z0-9]*_[A-Z0-9_]+\s*/?>', '', text, flags=re.IGNORECASE)
     return text.strip()
 
+
+def _normalize_whitespace(text: str) -> str:
+    """Normaliza espaços em branco da resposta antes do fatiamento.
+
+    - Converte literal '\\n' (escape sequence em texto) para newline real.
+    - Colapsa 3+ newlines consecutivas em 2 (paragraph break).
+    - Remove espaços em torno de cada quebra dupla.
+    - Tira leading/trailing whitespace global.
+    """
+    if not text:
+        return text
+    text = text.replace("\\n", "\n").replace("\\r", "")
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
@@ -283,9 +299,14 @@ def process_message(msg_payload):
         return
 
     # Detecção heurística pré-LLM: padrões óbvios de IA/atendente virtual no input do "lead"
+    # Política: NUNCA bloqueia na 1ª mensagem. Só bloqueia (24h) após acumular
+    # AI_SIGNAL_BLOCK_THRESHOLD sinais E o lead já ter enviado >= AI_SIGNAL_BLOCK_THRESHOLD msgs.
     try:
         from tools.ai_detector import detect as detect_ai, detect_weak_generic
-        from tools.manage_leads import seconds_since_last_ai_msg
+        from tools.manage_leads import (
+            seconds_since_last_ai_msg, register_ai_signal,
+            AI_SIGNAL_BLOCK_THRESHOLD, block_lead_as_ai,
+        )
 
         is_ai, motivo_ai = detect_ai(text_message)
 
@@ -298,11 +319,19 @@ def process_message(msg_payload):
                     motivo_ai = f"{motivo_weak} + resposta em {elapsed:.1f}s (pós-debounce)"
 
         if is_ai:
-            log(f"[AI_DETECT] Heurística detectou IA em {phone_number} [inst {instance_id}]: {motivo_ai}")
             save_message(phone_number, "human", text_message, instance_id)
-            save_message(phone_number, "ai", f"[IA detectada pela heurística: {motivo_ai}]", instance_id)
-            from tools.manage_leads import block_lead_as_ai
-            block_lead_as_ai(phone_number, f"heurística: {motivo_ai}", instance_id)
+            save_message(phone_number, "ai", f"[sinal de IA (heurística): {motivo_ai}]", instance_id)
+
+            signals = register_ai_signal(phone_number, f"heurística: {motivo_ai}", instance_id)
+            # Conta mensagens humanas (incluindo a recém-salva)
+            human_msgs = sum(1 for m in get_history(phone_number, instance_id) if m.get("type") == "human")
+            log(f"[AI_DETECT] Heurística sinalizou IA em {phone_number} [inst {instance_id}]: {motivo_ai} | signals={signals} human_msgs={human_msgs}")
+
+            if signals >= AI_SIGNAL_BLOCK_THRESHOLD and human_msgs >= AI_SIGNAL_BLOCK_THRESHOLD:
+                log(f"[AI_DETECT] Threshold atingido ({signals} sinais / {human_msgs} msgs) — bloqueando {phone_number} por 24h")
+                block_lead_as_ai(phone_number, f"heurística: {motivo_ai} (signals={signals})", instance_id)
+            else:
+                log(f"[AI_DETECT] Sinal registrado mas abaixo do threshold ({AI_SIGNAL_BLOCK_THRESHOLD}) — não bloqueando ainda")
             _save_session_log(phone_number, instance_id)
             return
     except Exception as e:
@@ -461,19 +490,37 @@ def process_message(msg_payload):
         return
 
     # 0b. Checa IA DO OUTRO LADO (Mya identificou que o "lead" é outra IA)
+    # Mesma política da heurística: só bloqueia após acumular sinais e mensagens suficientes.
     if re.search(r'<IGNORAR_IA\b[^>]*>', resposta_ai, re.IGNORECASE):
         motivo_match = re.search(r'<IGNORAR_IA\b[^>]*>(.*?)(?:</IGNORAR?_IA\s*>|<|$)', resposta_ai, re.IGNORECASE | re.DOTALL)
         motivo_ia = (motivo_match.group(1).strip() if motivo_match else "") or "sinais de IA detectados pelo LLM"
-        log(f"[AI_DETECT] LLM detectou IA em {phone_number} [inst {instance_id}]: {motivo_ia}")
-        save_message(phone_number, "ai", f"[IA detectada pelo LLM: {motivo_ia}]", instance_id)
-        from tools.manage_leads import block_lead_as_ai
-        block_lead_as_ai(phone_number, f"LLM: {motivo_ia}", instance_id)
+        save_message(phone_number, "ai", f"[sinal de IA (LLM): {motivo_ia}]", instance_id)
+
+        from tools.manage_leads import (
+            register_ai_signal, block_lead_as_ai, AI_SIGNAL_BLOCK_THRESHOLD,
+        )
+        signals = register_ai_signal(phone_number, f"LLM: {motivo_ia}", instance_id)
+        human_msgs = sum(1 for m in get_history(phone_number, instance_id) if m.get("type") == "human")
+        log(f"[AI_DETECT] LLM sinalizou IA em {phone_number} [inst {instance_id}]: {motivo_ia} | signals={signals} human_msgs={human_msgs}")
+
+        if signals >= AI_SIGNAL_BLOCK_THRESHOLD and human_msgs >= AI_SIGNAL_BLOCK_THRESHOLD:
+            log(f"[AI_DETECT] Threshold atingido ({signals} sinais / {human_msgs} msgs) — bloqueando {phone_number} por 24h")
+            block_lead_as_ai(phone_number, f"LLM: {motivo_ia} (signals={signals})", instance_id)
+        else:
+            log(f"[AI_DETECT] Sinal LLM registrado mas abaixo do threshold ({AI_SIGNAL_BLOCK_THRESHOLD}) — não bloqueando ainda")
         _save_session_log(phone_number, instance_id)
         return
 
-    # Mensagem humana confirmada → reseta timer de follow-ups
+    # Mensagem humana confirmada → reseta timer de follow-ups e zera sinais de IA acumulados
     from tools.manage_followups import reset_followup_timer
     reset_followup_timer(phone_number, instance_id)
+    try:
+        from tools.manage_leads import clear_ai_signals, get_ai_signal_count
+        if get_ai_signal_count(phone_number, instance_id) > 0:
+            clear_ai_signals(phone_number, instance_id)
+            log(f"[AI_DETECT] Sinais de IA zerados para {phone_number} (resposta humana confirmada)")
+    except Exception as e:
+        log(f"[AI_DETECT] Falha ao zerar sinais (não crítico): {e}")
 
     # Alerta "humano respondeu" — só na 1ª resposta humana confirmada do lead.
     # Roda em thread daemon para não bloquear a resposta da Mya ao lead.
@@ -610,8 +657,9 @@ def process_message(msg_payload):
     # Última linha de defesa antes de salvar no histórico e enviar ao WhatsApp.
     resposta_pre_sanitize = resposta_ai
     resposta_ai = _strip_control_tags(resposta_ai)
+    resposta_ai = _normalize_whitespace(resposta_ai)
     if resposta_pre_sanitize != resposta_ai:
-        log(f"[SANITIZE] Tag(s) de controle residual(is) removida(s) antes do envio. Antes: {resposta_pre_sanitize[:200]!r}")
+        log(f"[SANITIZE] Tag(s)/whitespace residual(is) removida(s) antes do envio. Antes: {resposta_pre_sanitize[:200]!r}")
 
     # Se após sanitização não sobrou nada, não envia mensagem vazia ao lead.
     if not resposta_ai.replace("[PDF_APRESENTACAO]", "").strip():
@@ -624,7 +672,14 @@ def process_message(msg_payload):
     save_message(phone_number, "ai", resposta_ai.replace("[PDF_APRESENTACAO]", "").strip(), instance_id)
 
     # 6. FATIADOR DE MENSAGENS E DELAY HUMANO COORDENADO
-    mensagens = [m.strip() for m in resposta_ai.split("\n\n") if m.strip()]
+    # Por garantia, normaliza cada chunk: remove escape literais e colapsa newlines internas.
+    mensagens = []
+    for m in resposta_ai.split("\n\n"):
+        chunk = _normalize_whitespace(m)
+        # Colapsa qualquer newline duplicada residual dentro do chunk (vira espaço único)
+        chunk = re.sub(r"\n{2,}", "\n", chunk).strip()
+        if chunk:
+            mensagens.append(chunk)
 
     for indice, msg_text in enumerate(mensagens):
         if "[PDF_APRESENTACAO]" in msg_text:
