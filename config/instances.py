@@ -11,7 +11,7 @@ META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v22.0")
 
 # Lista canônica de instâncias suportadas. Adicione novos ids aqui.
 # "disparo" = instância Meta Cloud API alimentada pelo disparador-whatsapp
-_INSTANCE_IDS = ["1", "2", "3", "gustavo", "disparo"]
+_INSTANCE_IDS = ["1", "2", "3", "gustavo", "disparo", "saionara", "cavalcanti"]
 
 
 def _build_instances() -> dict:
