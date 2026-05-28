@@ -88,3 +88,17 @@ def valid_instance(instance_id) -> bool:
     if cfg["provider"] == "meta":
         return bool(cfg["meta_phone_number_id"] and cfg["meta_access_token"])
     return bool(cfg["token"])
+
+
+def instance_id_from_token(token: str):
+    """Identifica o instance_id (UAZAPI) cujo token bate com o informado.
+
+    Usado pela rota /mya-disparo (sem sufixo) chamada pelo relay do SAI Comercial,
+    que envia o token canonico da instancia no header.
+    """
+    if not token:
+        return None
+    for iid, cfg in INSTANCES.items():
+        if cfg.get("provider") == "uazapi" and cfg.get("token") and cfg["token"] == token:
+            return iid
+    return None

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from config.instances import redis_prefix, valid_instance, OWNER_NUMBER, get_provider
+from config.instances import redis_prefix, valid_instance, OWNER_NUMBER, get_provider, instance_id_from_token
 
 load_dotenv()
 
@@ -430,6 +430,27 @@ async def receive_uazapi_outbound(instance_id: str, request: Request):
 @app.post("/mya-disparo-{instance_id}")
 async def receive_whatsapp_webhook(instance_id: str, request: Request):
     """Recebe os eventos via UAZAPI e aciona o Buffer antirrajadas (roteado por instância)."""
+    return await _handle_webhook(instance_id, request)
+
+
+@app.post("/mya-disparo")
+async def receive_whatsapp_webhook_by_token(request: Request):
+    """Mesma logica de /mya-disparo-{instance_id}, mas resolve o instance_id pelo header `token`.
+
+    Usado pelo relay do SAI Comercial: a baseUrl cadastrada no catalogo (model Chatbot)
+    aponta para /mya-disparo (sem sufixo) e o SAI repassa o token canonico da instancia
+    UAZAPI no header. Aqui descobrimos qual instance_id corresponde e delegamos para
+    o handler compartilhado.
+    """
+    token = request.headers.get("token", "")
+    if not token:
+        raise HTTPException(status_code=400, detail="Header 'token' obrigatorio")
+    instance_id = instance_id_from_token(token)
+    if not instance_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Instancia nao encontrada para o token informado. Cadastre UAZAPI_TOKEN_<ID> no env.",
+        )
     return await _handle_webhook(instance_id, request)
 
 
