@@ -160,7 +160,9 @@ async def _handle_webhook(instance_id: str, request: Request):
                     print(f"[DISP-ECHO] customId=disp-campaign ignorado [inst {instance_id}]")
                     return {"status": "success", "message": "Echo disparador (customId) ignorado"}
                 track = msg.get("track_source", "")
-                if track not in ("n8n", "IA"):
+                # Só bloqueia quando track_source vazio: envio manual via WhatsApp app ou painel SAI.
+                # Disparos automatizados (n8n, IA chatbot, disparo SAI) setam track_source explicito.
+                if track == "":
                     raw_chatid = msg.get("chatid", "")
                     lead_phone = raw_chatid.split("@")[0]
                     # Ignora echo de disparo automatizado (marcado por receive_uazapi_outbound)
