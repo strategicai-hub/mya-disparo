@@ -20,9 +20,9 @@ except Exception as e:
 
 FOLLOWUP_IMAGE_URL = "https://webhook-whatsapp.strategicai.com.br/mya-disparo/resultado"
 
-# Intervalos em segundos
-INTERVALS_NORMAL = [86400, 259200, 604800]    # 1d, 3d, 7d (UAZAPI legacy)
-INTERVALS_OWNER  = [86400, 259200, 604800]    # 1d, 3d, 7d (UAZAPI legacy)
+# Intervalos em segundos — UAZAPI legacy: step0 (1h), step1 (1d), step2 (3d), step3 (7d)
+INTERVALS_NORMAL = [3600, 86400, 259200, 604800]
+INTERVALS_OWNER  = [3600, 86400, 259200, 604800]
 
 # Meta API Oficial: 1h (follow-up contextual via LLM) e 4h (mensagem de encerramento)
 META_FOLLOWUP_DELAYS = [3600, 14400]
@@ -35,6 +35,28 @@ CLOSURE_MESSAGE_VARIANTS = [
 ]
 
 SAO_PAULO_TZ = timezone(timedelta(hours=-3))
+
+
+def _clamp_1h_to_window(ts: float) -> float:
+    """Garante que o step 0 (+1h) cai dentro de 8h-18h SP.
+
+    - Se a hora calculada estiver entre 8h e 18h (em qualquer dia, incl. fim de semana),
+      mantém o timestamp.
+    - Caso contrário, empurra para o próximo dia útil às 8h (pula sáb/dom).
+    """
+    dt = datetime.fromtimestamp(ts, tz=SAO_PAULO_TZ)
+    if 8 <= dt.hour < 18:
+        return ts
+
+    # Fora da janela: avança pro próximo dia 8h e depois pula fim de semana se cair em sáb/dom
+    next_day = dt + timedelta(days=1) if dt.hour >= 18 else dt
+    next_day = next_day.replace(hour=8, minute=random.randint(0, 30), second=random.randint(0, 59), microsecond=0)
+    # Se cair em sáb (5) → +2d (segunda). Se domingo (6) → +1d.
+    if next_day.weekday() == 5:
+        next_day = next_day + timedelta(days=2)
+    elif next_day.weekday() == 6:
+        next_day = next_day + timedelta(days=1)
+    return next_day.timestamp()
 
 
 def _skip_weekend(ts: float) -> float:
@@ -120,9 +142,41 @@ def _advance_followup_cycle(phone_number: str, instance_id) -> int:
     return redis_client.incr(f"{redis_prefix(instance_id)}:followup:cycle:{phone_number}") - 1
 
 
-def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: str, cycle: int = 0) -> list:
-    """Gera 3 follow-ups variados e contextuais, usando ciclos diferentes a cada rodada."""
+def _build_step0_variants(nome: str, cycle: int) -> list:
+    """4 variações de toque rápido (+1h) para reagendamento após silêncio/auto-reply."""
     saudacao = f"Oi {nome}, " if nome else "Oi, "
+    if cycle == 0:
+        return [
+            f"{saudacao}só passando rapidinho pra garantir que você viu minha mensagem!",
+            f"{saudacao}aproveitando que tô por aqui, deu pra dar uma olhada no que mandei?",
+            f"{saudacao}imagino que tá corrido aí. Quando puder, dá uma olhada na mensagem que mandei.",
+            f"{saudacao}só pra não te perder no meio da correria — chegou a ver o que te enviei?",
+        ]
+    if cycle == 1:
+        return [
+            f"{saudacao}tô voltando aqui rapidinho pra ver se faz sentido a gente trocar uma ideia.",
+            f"{saudacao}vi que ainda não conseguimos conversar. Posso te mandar mais detalhes?",
+            f"{saudacao}só checando se você quer entender melhor como funciona antes de decidir.",
+            f"{saudacao}tô aqui caso queira tirar alguma dúvida sobre o que mandei.",
+        ]
+    return [
+        f"{saudacao}última passada rápida por aqui antes de eu te deixar em paz!",
+        f"{saudacao}prometo que essa é a última. Algum interesse em saber mais?",
+        f"{saudacao}só pra confirmar se faz sentido seguirmos a conversa ou se prefere que eu não chame mais.",
+        f"{saudacao}me avisa rapidinho se faz sentido conversarmos ou se prefere que eu pare por aqui.",
+    ]
+
+
+def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: str, cycle: int = 0) -> list:
+    """Gera 4 follow-ups variados e contextuais, usando ciclos diferentes a cada rodada.
+
+    Step 0 (+1h): toque rápido pós silêncio/auto-reply
+    Step 1 (+1d): primeiro toque longo no dia útil seguinte
+    Step 2 (+3d): prova social / case
+    Step 3 (+7d): imagem com resultado + porta aberta
+    """
+    saudacao = f"Oi {nome}, " if nome else "Oi, "
+    step0_msg = random.choice(_build_step0_variants(nome, cycle))
 
     if cycle == 0:
         step1_variants = [
@@ -145,6 +199,7 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
             f"Sem problemas! Vou te deixar com esse resultado que tivemos e fico à disposição quando fizer sentido pra você. Sucesso!",
         ]
         return [
+            {"phone": phone_number, "step": 0, "type": "text", "message": step0_msg},
             {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
             {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
             {"phone": phone_number, "step": 3, "type": "image", "image_url": FOLLOWUP_IMAGE_URL, "message": random.choice(step3_variants)},
@@ -168,6 +223,7 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
             f"Sem problemas! Quando sentir que é hora, estou por aqui. Sucesso no seu negócio!",
         ]
         return [
+            {"phone": phone_number, "step": 0, "type": "text", "message": step0_msg},
             {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
             {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
             {"phone": phone_number, "step": 3, "type": "text", "message": random.choice(step3_variants)},
@@ -187,6 +243,7 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
             "Sucesso no seu negócio! Fico por aqui caso precise. Um abraço!",
         ]
         return [
+            {"phone": phone_number, "step": 0, "type": "text", "message": step0_msg},
             {"phone": phone_number, "step": 1, "type": "text", "message": random.choice(step1_variants)},
             {"phone": phone_number, "step": 2, "type": "text", "message": random.choice(step2_variants)},
             {"phone": phone_number, "step": 3, "type": "text", "message": random.choice(step3_variants)},
@@ -194,7 +251,12 @@ def _build_followup_messages(phone_number: str, nome: str, nicho: str, resumo: s
 
 
 def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
-    """Agenda 3 follow-ups variados no Redis (sorted set), avançando o ciclo a cada chamada.
+    """Agenda 4 follow-ups variados no Redis (sorted set), avançando o ciclo a cada chamada.
+
+    Step 0 (+1h): toque rápido — dispara mesmo no fim de semana, mas é clampado pra 8h-18h
+    Step 1 (+1d): toque longo no dia útil seguinte, horário aleatório 8h-18h
+    Step 2 (+3d): prova social
+    Step 3 (+7d): imagem com resultado + porta aberta
 
     Bloqueia silenciosamente se o lead tem reunião agendada (event_id preenchido) —
     após agendamento, follow-up é PROIBIDO para aquele número.
@@ -218,10 +280,12 @@ def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: st
 
     intervals = INTERVALS_OWNER if phone_number == OWNER_NUMBER else INTERVALS_NORMAL
 
-    t1 = _next_morning_timestamp()
-    t2 = _skip_weekend(t1 + intervals[1] - intervals[0])
-    t3 = _skip_weekend(t1 + intervals[2] - intervals[0])
-    timestamps = [t1, t2, t3]
+    now = time.time()
+    t0 = _clamp_1h_to_window(now + intervals[0])              # +1h (clampado pra 8-18h)
+    t1 = _next_morning_timestamp()                            # +1d aleatório 8-18h
+    t2 = _skip_weekend(t1 + intervals[2] - intervals[1])      # +3d (a partir de t1)
+    t3 = _skip_weekend(t1 + intervals[3] - intervals[1])      # +7d (a partir de t1)
+    timestamps = [t0, t1, t2, t3]
 
     messages = _build_followup_messages(phone_number, nome, nicho, resumo, cycle=cycle)
 
@@ -236,7 +300,66 @@ def schedule_followups(phone_number: str, instance_id, nome: str = "", nicho: st
         redis_client.sadd(f"{prefix}:followup:members:{phone_number}", raw)
 
     redis_client.set(f"{prefix}:followup:active:{phone_number}", "1")
-    print(f"[FOLLOWUP] 3 follow-ups agendados para {phone_number} [inst {instance_id}]")
+    sp = SAO_PAULO_TZ
+    dts = [datetime.fromtimestamp(t, tz=sp).strftime("%d/%m %H:%M") for t in timestamps]
+    print(f"[FOLLOWUP] 4 follow-ups (cycle {cycle}) agendados para {phone_number}: {dts} [inst {instance_id}]")
+
+
+def reschedule_step0_after_auto_reply(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
+    """Cancela apenas o step 0 (+1h) pendente e reagenda um novo +1h a partir de agora.
+
+    Usado quando o lead manda auto-reply do WhatsApp (out-of-office, mensagem automática):
+    queremos ressuscitar o toque rápido sem mexer nos steps longos (1d/3d/7d) e sem avançar ciclo.
+
+    Bloqueia se: sem followups ativos, lead já agendou, ou já fechou ciclo.
+    """
+    if not redis_client:
+        return
+
+    from tools.manage_leads import get_lead_info
+    if get_lead_info(phone_number, instance_id).get("event_id"):
+        return
+
+    if not has_active_followups(phone_number, instance_id):
+        return
+
+    cycle = _get_followup_cycle(phone_number, instance_id) - 1
+    if cycle < 0 or cycle > 2:
+        return
+
+    prefix = redis_prefix(instance_id)
+    members_key = f"{prefix}:followup:members:{phone_number}"
+    followups_key = f"{prefix}:followups"
+
+    # Remove o step 0 anterior (se houver)
+    for raw in list(redis_client.smembers(members_key)):
+        try:
+            item = json.loads(raw)
+            if item.get("step") == 0:
+                redis_client.zrem(followups_key, raw)
+                redis_client.srem(members_key, raw)
+        except json.JSONDecodeError:
+            redis_client.zrem(followups_key, raw)
+            redis_client.srem(members_key, raw)
+
+    # Cria novo step 0 com timestamp +1h (clampado pra 8h-18h)
+    new_ts = _clamp_1h_to_window(time.time() + 3600)
+    step0_msg = random.choice(_build_step0_variants(nome, cycle))
+    msg = {
+        "phone": phone_number,
+        "step": 0,
+        "type": "text",
+        "message": step0_msg,
+        "instance_id": str(instance_id),
+    }
+    raw = json.dumps(msg, ensure_ascii=False)
+    redis_client.zadd(followups_key, {raw: new_ts})
+    redis_client.sadd(members_key, raw)
+    redis_client.set(f"{prefix}:followup:active:{phone_number}", "1")
+
+    sp = SAO_PAULO_TZ
+    dt = datetime.fromtimestamp(new_ts, tz=sp).strftime("%d/%m %H:%M")
+    print(f"[FOLLOWUP] Step 0 reagendado pós auto-reply para {phone_number}: [{dt}] [inst {instance_id}]")
 
 
 def _build_meta_followup_steps(phone_number: str, nome: str, nicho: str, resumo: str) -> list:

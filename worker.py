@@ -484,8 +484,19 @@ def process_message(msg_payload):
     if re.search(r'<IGNORAR_AUTO\b[^>]*>', resposta_ai, re.IGNORECASE):
         motivo_match = re.search(r'<IGNORAR_AUTO\b[^>]*>(.*?)(?:</IGNORAR?_AUTO\s*>|<|$)', resposta_ai, re.IGNORECASE | re.DOTALL)
         motivo_auto = motivo_match.group(1).strip() if motivo_match else ""
-        log(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Ignorando e mantendo follow-ups.")
+        log(f"[AUTO] Mensagem automática detectada: {motivo_auto}. Reagendando step 0 (+1h) e mantendo demais follow-ups.")
         save_message(phone_number, "ai", f"[auto-reply ignorada: {motivo_auto}]", instance_id)
+
+        try:
+            nome_conhecido = (get_lead_info(phone_number, instance_id) or {}).get("nome", "") or ""
+            nicho_conhecido = (get_lead_info(phone_number, instance_id) or {}).get("nicho", "") or ""
+        except Exception:
+            nome_conhecido = ""
+            nicho_conhecido = ""
+
+        from tools.manage_followups import reschedule_step0_after_auto_reply
+        reschedule_step0_after_auto_reply(phone_number, instance_id, nome=nome_conhecido, nicho=nicho_conhecido)
+
         _save_session_log(phone_number, instance_id)
         return
 
