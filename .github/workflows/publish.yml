@@ -36,7 +36,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -e
-          PORTAINER_URL="https://91.98.64.92:9443"
+          PORTAINER_URL="https://portainer.strategicai.com.br"
           ENDPOINT_ID=1
           IMAGE_REF="ghcr.io/strategicai-hub/mya-disparo:latest@${IMAGE_DIGEST}"
           SERVICES="mya-disparo_api mya-disparo_worker mya-disparo_scheduler"

@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
 
-PORTAINER_URL = os.getenv("PORTAINER_URL", "https://91.98.64.92:9443").rstrip("/")
+PORTAINER_URL = os.getenv("PORTAINER_URL", "https://portainer.strategicai.com.br").rstrip("/")
 PORTAINER_TOKEN = os.getenv("PORTAINER_TOKEN", "")
 ENDPOINT_ID = 1
 SERVICE_NAME = "mya-disparo_api"

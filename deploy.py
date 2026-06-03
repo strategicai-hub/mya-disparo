@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PORTAINER_URL = os.getenv("PORTAINER_URL", "https://91.98.64.92:9443").rstrip("/")
+PORTAINER_URL = os.getenv("PORTAINER_URL", "https://portainer.strategicai.com.br").rstrip("/")
 PORTAINER_TOKEN = os.getenv("PORTAINER_TOKEN", "")
 SERVICES_TO_UPDATE = ["mya-disparo_api", "mya-disparo_worker", "mya-disparo_scheduler"]
 IMAGE = "ghcr.io/strategicai-hub/mya-disparo:latest"
