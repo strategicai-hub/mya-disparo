@@ -44,7 +44,14 @@ def get_tenant(instance_id, phone: str) -> str:
 
 
 def notify_outbound(instance_id, phone: str, text: str, wamid: str, msg_type: str = "text") -> None:
-    """Notifica o disparador (best-effort, não levanta exceção)."""
+    """Reflete o outbound da Mya no inbox do SAI Comercial (best-effort, não levanta exceção).
+
+    Só é chamado pelo caminho Meta (providers/meta.py), ou seja, a mensagem já foi
+    enviada pela Graph API oficial. Por isso declara provider="OFFICIAL" explicito: o
+    endpoint /api/chatbot/outbound do SAI é record-only (não reenvia) e, com o provider
+    fixo, evita a resolução automática que poderia criar conversa OFFICIAL fantasma ou
+    banner falso de "janela de 24h".
+    """
     if not _DISPARADOR_AUDIT_URL or not _CHATBOT_SECRET:
         return
     tenant_id = get_tenant(instance_id, phone)
@@ -59,6 +66,7 @@ def notify_outbound(instance_id, phone: str, text: str, wamid: str, msg_type: st
                 "text": text,
                 "wamid": wamid,
                 "type": msg_type,
+                "provider": "OFFICIAL",
             },
             headers={"x-chatbot-secret": _CHATBOT_SECRET, "Content-Type": "application/json"},
             timeout=5,
