@@ -739,6 +739,14 @@ def process_message(msg_payload):
 
     _save_session_log(phone_number, instance_id)
 
+def _hb_safe_sleep(ch, seconds):
+    """Sleep que mantém o heartbeat do RabbitMQ vivo (evita drop da conexão em pausas longas)."""
+    try:
+        ch.connection.sleep(seconds)  # BlockingConnection.sleep processa heartbeats
+    except Exception:
+        time.sleep(seconds)
+
+
 def callback(ch, method, properties, body):
     """Função invocada sempre que chegou nova msg do RabbitMQ."""
     msg_payload = json.loads(body)
@@ -746,7 +754,19 @@ def callback(ch, method, properties, body):
         process_message(msg_payload)
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
-        print(f"Falha ao processar a mensagem: {e}")
+        emsg = str(e)
+        # Backoff obrigatório antes de requeue. Sem isso, o nack+requeue imediato vira uma
+        # tempestade de retry: em 429 (cota de tokens/min do Gemini estourada) a mesma msg
+        # é reprocessada a cada ~2s, cada retry reenvia todo o contexto+tools e MANTÉM a cota
+        # estourada — nenhuma msg é respondida e a fila inteira trava (incidente 08/06/2026).
+        is_quota = ("RESOURCE_EXHAUSTED" in emsg) or ("429" in emsg) or ("quota" in emsg.lower())
+        if is_quota:
+            delay = 45  # > janela de retry que o Gemini sugere (~35-44s); deixa a cota/min recuperar
+            print(f"[BACKOFF] 429/cota Gemini — pausando {delay}s antes de devolver à fila: {emsg[:140]}")
+        else:
+            delay = 3   # erro genérico: evita loop apertado em msg-veneno
+            print(f"Falha ao processar a mensagem: {e}")
+        _hb_safe_sleep(ch, delay)
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
 
