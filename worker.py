@@ -383,7 +383,7 @@ def process_message(msg_payload):
     evento_criado = False
 
     try:
-        model_id = "gemini-2.5-flash"
+        model_id = "gemini-3.1-flash-lite"
         gemini_history = []
 
         if len(historico) > 1:

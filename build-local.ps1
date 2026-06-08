@@ -72,12 +72,11 @@ if (-not ($buildxList | Select-String $builderName)) {
 
 $metaFile = Join-Path $env:TEMP "buildx-meta-mya.json"
 
-docker buildx build `
-    --platform linux/amd64 `
-    --push `
-    --tag $IMAGE_TAG `
-    --metadata-file $metaFile `
-    $projectRoot
+# buildx escreve progresso no stderr; sob $ErrorActionPreference=Stop o PS 5.1 trata
+# isso como NativeCommandError e aborta. Rodar via `cmd /c ... 2>&1` faz o merge no shell
+# nativo e o PS recebe tudo como stdout (sem stream de erro).
+$buildCmd = "docker buildx build --platform linux/amd64 --push --tag `"$IMAGE_TAG`" --metadata-file `"$metaFile`" `"$projectRoot`" 2>&1"
+cmd /c $buildCmd
 
 if ($LASTEXITCODE -ne 0) { Write-Error "Build falhou." }
 

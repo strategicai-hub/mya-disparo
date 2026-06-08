@@ -90,7 +90,7 @@ def generate_followup_text(
 
     try:
         response = _client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.1-flash-lite",
             contents=user_prompt,
             config=gtypes.GenerateContentConfig(
                 system_instruction=_SYSTEM_PROMPT,
