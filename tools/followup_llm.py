@@ -34,7 +34,24 @@ REGRAS RÍGIDAS:
 Responda APENAS com o texto da mensagem, sem aspas, sem prefixos, sem explicações."""
 
 
-def _build_user_prompt(nome: str, nicho: str, resumo: str, history_text: str) -> str:
+_CLOSURE_SYSTEM_PROMPT = """Você é a Mya, SDR digital da Strategic AI. Está escrevendo o ÚLTIMO follow-up no WhatsApp para um lead que recebeu um disparo comercial e não engatou a conversa. Este é o toque de encerramento, perto do fim da janela de contato: você vai parar de chamar, com leveza, deixando a porta aberta.
+
+Sua missão: escrever UMA mensagem curta, leve e contextual de despedida — algo como "tudo bem, imagino que não seja o melhor momento, vou parar por aqui pra não incomodar, quando fizer sentido me chama". Sem ressentimento, sem pitch, sem cobrança.
+
+REGRAS RÍGIDAS:
+1. Tom: humano, leve, brasileiro, gentil. Como uma vendedora real que respeita o espaço do lead.
+2. Tamanho: 1 a 3 frases curtas. NUNCA passa de 280 caracteres.
+3. Use o nome do lead se você souber. Não invente nome.
+4. Faça referência sutil ao que já foi dito na conversa (ou ao nicho/tema do disparo, se for só o disparo inicial). Não repita literalmente o histórico.
+5. Deixe claro que você vai parar de chamar por ora e que fica à disposição quando fizer sentido. NÃO termine com pergunta de venda nem imperativo ("agende já", "fale comigo agora").
+6. NUNCA escreva markdown, bullets, **negrito**, listas. Texto corrido.
+7. NUNCA escreva saudações com vírgula dupla ("Oi João, tudo bem,") — escolha uma e siga.
+8. NÃO ofereça desconto, prazo, garantia ou qualquer condição comercial inventada.
+
+Responda APENAS com o texto da mensagem, sem aspas, sem prefixos, sem explicações."""
+
+
+def _build_user_prompt(nome: str, nicho: str, resumo: str, history_text: str, kind: str = "reengage") -> str:
     parts = ["Contexto do lead:"]
     if nome:
         parts.append(f"- Nome: {nome}")
@@ -48,7 +65,10 @@ def _build_user_prompt(nome: str, nicho: str, resumo: str, history_text: str) ->
     parts.append("Histórico das últimas mensagens (humano=lead, ai=mya):")
     parts.append(history_text or "(apenas o disparo inicial, sem resposta do lead)")
     parts.append("")
-    parts.append("Escreva agora o follow-up de +1h para retomar essa conversa.")
+    if kind == "closure":
+        parts.append("Escreva agora a mensagem de encerramento (último follow-up), encerrando com leveza e deixando a porta aberta.")
+    else:
+        parts.append("Escreva agora o follow-up de +1h para retomar essa conversa.")
     return "\n".join(parts)
 
 
@@ -80,20 +100,26 @@ def generate_followup_text(
     nicho: str = "",
     resumo: str = "",
     fallback: str = "",
+    kind: str = "reengage",
 ) -> str:
-    """Gera o texto do follow-up +1h. Retorna fallback em caso de falha."""
+    """Gera o texto do follow-up contextual. Retorna fallback em caso de falha.
+
+    kind="reengage": follow-up de +1h que retoma a conversa.
+    kind="closure": último toque, despedida leve no fim da janela de 24h.
+    """
     if not _client:
         return fallback or "Oi, conseguiu ver a mensagem que te mandei?"
 
     history_text = _format_history(phone_number, instance_id)
-    user_prompt = _build_user_prompt(nome, nicho, resumo, history_text)
+    user_prompt = _build_user_prompt(nome, nicho, resumo, history_text, kind=kind)
+    system_prompt = _CLOSURE_SYSTEM_PROMPT if kind == "closure" else _SYSTEM_PROMPT
 
     try:
         response = _client.models.generate_content(
             model="gemini-3.1-flash-lite",
             contents=user_prompt,
             config=gtypes.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
+                system_instruction=system_prompt,
                 temperature=0.7,
                 max_output_tokens=200,
                 thinking_config=gtypes.ThinkingConfig(thinking_budget=0),

@@ -108,6 +108,7 @@ def process_due_followups_for_instance(instance_id: str):
                     phone, item_instance,
                     nome=nome, nicho=nicho, resumo=resumo,
                     fallback=item.get("fallback") or "",
+                    kind=item.get("kind") or "reengage",
                 )
                 print(f"[SCHEDULER inst {item_instance}] Step {step} (LLM) gerou para {phone}: {message[:80]!r}")
             else:

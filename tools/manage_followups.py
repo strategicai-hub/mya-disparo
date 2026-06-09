@@ -24,8 +24,10 @@ FOLLOWUP_IMAGE_URL = "https://webhook-whatsapp.strategicai.com.br/mya-disparo/re
 INTERVALS_NORMAL = [3600, 86400, 259200, 604800]
 INTERVALS_OWNER  = [3600, 86400, 259200, 604800]
 
-# Meta API Oficial: 1h (follow-up contextual via LLM) e 4h (mensagem de encerramento)
-META_FOLLOWUP_DELAYS = [3600, 14400]
+# Meta API Oficial: step1 = +1h (follow-up contextual via LLM). O step2 (encerramento)
+# não tem delay fixo — é calculado por _step2_time() para cair ~4h antes da janela de
+# 24h fechar (≈+20h), aproveitando ao máximo a janela sem precisar de template.
+META_STEP1_DELAY = 3600
 
 CLOSURE_MESSAGE_VARIANTS = [
     "Sem problemas! Entendo que esse não é o melhor momento. Vou parar por aqui pra não te incomodar. Quando fizer sentido, é só me chamar — fico à disposição!",
@@ -84,6 +86,22 @@ def _next_morning_timestamp() -> float:
         microsecond=0,
     )
     return _skip_weekend(amanha.timestamp())
+
+
+def _step2_time(base: datetime | None = None) -> datetime:
+    """Calcula o horário do step2 dentro da janela de 24h da API Oficial.
+
+    Alvo ideal: base + 20h (≈4h antes da janela fechar). Em seguida clampa
+    para horário comercial 8h-19h SP: se o alvo cai depois das 19h, volta
+    para 19h do mesmo dia; se cai antes das 8h (madrugada), volta para 19h
+    do dia anterior. 19h é o teto para evitar disparo tarde da noite.
+    """
+    ref = base or datetime.now(SAO_PAULO_TZ)
+    ideal = ref + timedelta(hours=20)
+    if 8 <= ideal.hour < 19:
+        return ideal.replace(minute=random.randint(0, 59), second=random.randint(0, 59), microsecond=0)
+    base_day = ideal if ideal.hour >= 19 else (ideal - timedelta(days=1))
+    return base_day.replace(hour=19, minute=random.randint(0, 59), second=random.randint(0, 59), microsecond=0)
 
 
 def mark_closure_sent(phone_number: str, instance_id) -> None:
@@ -363,22 +381,21 @@ def reschedule_step0_after_auto_reply(phone_number: str, instance_id, nome: str 
 
 
 def _build_meta_followup_steps(phone_number: str, nome: str, nicho: str, resumo: str) -> list:
-    """Monta os 2 steps da sequência Meta API Oficial:
-    - step 1 (+1h): mensagem contextual gerada por LLM no momento do envio
-      (scheduler.py chama tools.followup_llm para gerar o texto).
-    - step 2 (+4h): mensagem fixa de encerramento.
+    """Monta os 2 steps da sequência Meta API Oficial — ambos contextuais via LLM,
+    gerados no momento do envio (scheduler.py chama tools.followup_llm):
+    - step 1 (+1h): reengajamento, retoma a conversa.
+    - step 2 (fim da janela 24h): encerramento contextual (despedida leve). As
+      variantes fixas de CLOSURE_MESSAGE_VARIANTS ficam só como fallback do LLM.
     """
+    ctx = {"nome": nome or "", "nicho": nicho or "", "resumo": resumo or ""}
     return [
         {
             "phone": phone_number,
             "step": 1,
             "type": "text",
             "use_llm": True,
-            "context": {
-                "nome": nome or "",
-                "nicho": nicho or "",
-                "resumo": resumo or "",
-            },
+            "kind": "reengage",
+            "context": ctx,
             "fallback": (
                 f"Oi {nome}, " if nome else "Oi, "
             ) + "imagino que seu dia esteja corrido. Conseguiu dar uma olhada na mensagem que te mandei?",
@@ -387,8 +404,11 @@ def _build_meta_followup_steps(phone_number: str, nome: str, nicho: str, resumo:
             "phone": phone_number,
             "step": 2,
             "type": "text",
+            "use_llm": True,
+            "kind": "closure",
             "closure": True,
-            "message": random.choice(CLOSURE_MESSAGE_VARIANTS),
+            "context": ctx,
+            "fallback": random.choice(CLOSURE_MESSAGE_VARIANTS),
         },
     ]
 
@@ -396,7 +416,8 @@ def _build_meta_followup_steps(phone_number: str, nome: str, nicho: str, resumo:
 def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
     """Agenda 2 follow-ups após disparo outbound via API Oficial Meta:
     - Step 1 (+1h): mensagem contextual via LLM com o histórico da conversa.
-    - Step 2 (+4h): mensagem de encerramento ("não é o momento, vou parar").
+    - Step 2 (~+20h, clampado a 8h-19h SP): mensagem de encerramento, disparada
+      ~4h antes da janela de 24h fechar para aproveitá-la ao máximo sem template.
 
     Regras:
     - Bloqueia se lead tem reunião agendada (event_id) ou se closure já foi enviado.
@@ -421,7 +442,7 @@ def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str =
     steps = _build_meta_followup_steps(phone_number, nome, nicho, resumo)
 
     now = time.time()
-    timestamps = [now + d for d in META_FOLLOWUP_DELAYS]
+    timestamps = [now + META_STEP1_DELAY, _step2_time().timestamp()]
 
     prefix = redis_prefix(instance_id)
     followups_key = f"{prefix}:followups"
@@ -436,13 +457,14 @@ def schedule_meta_outbound_followups(phone_number: str, instance_id, nome: str =
     sp = SAO_PAULO_TZ
     dt1 = datetime.fromtimestamp(timestamps[0], tz=sp).strftime("%d/%m %H:%M")
     dt2 = datetime.fromtimestamp(timestamps[1], tz=sp).strftime("%d/%m %H:%M")
-    print(f"[FOLLOWUP] 2 follow-ups (meta-outbound 1h/4h) agendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
+    print(f"[FOLLOWUP] 2 follow-ups (meta-outbound +1h/janela-24h) agendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
 
 
 def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = "", nicho: str = "", resumo: str = ""):
     """Reagenda 2 follow-ups após cada resposta do lead na API Oficial Meta:
     - Step 1 (+1h a partir de agora): contextual via LLM.
-    - Step 2 (+4h a partir de agora): mensagem de encerramento.
+    - Step 2 (~+20h, clampado a 8h-19h SP): mensagem de encerramento — a resposta
+      do lead reabre a janela de 24h, então o step2 volta a mirar o fim dela.
 
     Cancela follow-ups anteriores e reseta o timer.
     Bloqueia se lead tem reunião agendada ou se closure já foi enviado.
@@ -465,7 +487,7 @@ def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = ""
     steps = _build_meta_followup_steps(phone_number, nome, nicho, resumo)
 
     now = time.time()
-    timestamps = [now + d for d in META_FOLLOWUP_DELAYS]
+    timestamps = [now + META_STEP1_DELAY, _step2_time().timestamp()]
 
     prefix = redis_prefix(instance_id)
     followups_key = f"{prefix}:followups"
@@ -480,7 +502,7 @@ def schedule_meta_reply_followups(phone_number: str, instance_id, nome: str = ""
     sp = SAO_PAULO_TZ
     dt1 = datetime.fromtimestamp(timestamps[0], tz=sp).strftime("%d/%m %H:%M")
     dt2 = datetime.fromtimestamp(timestamps[1], tz=sp).strftime("%d/%m %H:%M")
-    print(f"[FOLLOWUP] 2 follow-ups (meta-reply 1h/4h) reagendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
+    print(f"[FOLLOWUP] 2 follow-ups (meta-reply +1h/janela-24h) reagendados para {phone_number}: [{dt1}] e [{dt2}] [inst {instance_id}]")
 
 
 def permanently_block_followups(phone_number: str, instance_id):

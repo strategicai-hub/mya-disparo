@@ -26,7 +26,7 @@ Comportamento por contato (na ordem):
 3. Gera mensagem contextual via Gemini.
 4. Envia via Meta API (provider meta da instância).
 5. Salva no histórico do mya-disparo + marca timestamps + cancela follow-ups
-   antigos e agenda os novos 1h/4h via schedule_meta_outbound_followups.
+   antigos e agenda os novos (+1h/fim da janela 24h) via schedule_meta_outbound_followups.
 6. Sleep random entre JITTER_MIN_SECONDS e JITTER_MAX_SECONDS antes do próximo.
 """
 from __future__ import annotations
@@ -249,7 +249,7 @@ def main() -> int:
                 if ok:
                     save_message(phone, "ai", text, instance_id)
                     print("  ENVIADO OK.")
-                    # Agenda novo ciclo 1h/4h a partir de agora
+                    # Agenda novo ciclo (+1h/fim da janela 24h) a partir de agora
                     schedule_meta_outbound_followups(
                         phone, instance_id,
                         nome=nome, nicho=nicho, resumo=resumo,
