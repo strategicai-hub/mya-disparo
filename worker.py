@@ -469,6 +469,20 @@ def process_message(msg_payload):
                         result = dispatch(fn_args)
                         if fn_name == "criar_evento" and result.get("event_id"):
                             save_lead_info(phone_number, {"event_id": result["event_id"]}, instance_id)
+                            # Cria/move o card do lead para "Reunião agendada" no pipeline do SAI Comercial
+                            try:
+                                from tools.crm_api import mark_meeting_scheduled
+                                _lead_now = get_lead_info(phone_number, instance_id)
+                                _res_sai = mark_meeting_scheduled(
+                                    phone_number,
+                                    _lead_now.get("nome") or fn_args.get("nome") or push_name or "",
+                                    fn_args.get("wa_name") or push_name or "",
+                                    instance_id,
+                                    meeting_at=result.get("start", ""),
+                                )
+                                log(f"[SAI-CRM] mark_meeting_scheduled({phone_number}): {json.dumps(_res_sai, ensure_ascii=False)[:200]}")
+                            except Exception as _e:
+                                log(f"[SAI-CRM] Falha ao mover card para Reunião agendada (não crítico): {_e}")
                         if fn_name == "deleta_evento" and result.get("success"):
                             save_lead_info(phone_number, {"event_id": ""}, instance_id)
                     else:
