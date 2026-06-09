@@ -381,6 +381,24 @@ def process_message(msg_payload):
     # HISTÓRICO CONTEXTUAL PARA O LLM
     historico = get_history(phone_number, instance_id)
 
+    # Primeira resposta do lead ao disparo: o disparo inicial (ex.: template Meta
+    # enviado pelo SAI Comercial) nem sempre é registrado no histórico do mya-disparo.
+    # Sem nenhum turno anterior da Mya, o LLM trata a conversa como primeiro contato,
+    # se reapresenta e despeja o pitch (comportamento de inbound/mya-ads) — violando a
+    # regra #5. Reforça o estado da conversa para garantir início pela FASE 1.
+    ja_falou_com_lead = any(m.get("type") == "ai" for m in historico)
+    if not ja_falou_com_lead:
+        prompt_completo += (
+            "\n\n---\n## ⚠️ ESTADO DA CONVERSA (LEIA ANTES DE RESPONDER)\n"
+            "A mensagem de prospecção inicial JÁ foi enviada a este lead — você já abriu a conversa. "
+            "Esta mensagem é a PRIMEIRA resposta dele ao disparo.\n"
+            "É TERMINANTEMENTE PROIBIDO se apresentar, dizer 'oi, eu sou a Mya', citar "
+            "'SAI - Strategic Artificial Intelligence' ou recapitular quem você é / o que a empresa faz — "
+            "o lead já recebeu tudo isso no disparo. Apresentar-se de novo é erro grave.\n"
+            "Comece DIRETO pela FASE 1: balão de eco/empatia + balão de qualificação (gestor ou secretária). "
+            "Nada de pitch da solução agora.\n"
+        )
+
     # --- CHAMADA REAL AO LLM (Gemini) COM FUNCTION CALLING ---
     evento_criado = False
 
