@@ -1,7 +1,7 @@
 """Classificador LLM dedicado: a mensagem do lead foi escrita por um HUMANO?
 
 Chamado apenas no primeiro inbound do lead (após o disparo), em paralelo ao
-fluxo principal, para evitar latência. Usa gemini-2.5-flash com thinking=0.
+fluxo principal, para evitar latência. Usa gemini-3.1-flash-lite com thinking=0.
 
 Retorna (is_human: bool, confianca: str, motivo: str).
 """
