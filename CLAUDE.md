@@ -80,7 +80,7 @@ Sempre pergunte antes de:
 ### Histórico e CRM
 - Histórico: `disparo:history:{phone}` (lista de mensagens)
 - CRM: `disparo:lead:{phone}` (JSON: nome, nicho, resumo, event_id, whatsapp)
-- Disparo inicial (n8n) é salvo no histórico
+- Disparo inicial (SAI Comercial) é salvo no histórico via POST /mya-disparo-uazapi-outbound-{id}
 - Follow-ups são salvos no histórico após envio
 - Resumo é lido como "Resumo acumulado", não "última conversa"
 

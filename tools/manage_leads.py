@@ -60,7 +60,7 @@ AI_BLOCK_TTL_SECONDS = 60 * 60 * 24
 # Contador de sinais de IA por lead (heurística + tag <IGNORAR_IA>):
 # só bloqueia o lead quando atingir AI_SIGNAL_BLOCK_THRESHOLD sinais distintos.
 AI_SIGNAL_TTL_SECONDS = 60 * 60 * 24 * 7    # 7 dias de janela acumulativa
-AI_SIGNAL_BLOCK_THRESHOLD = 4               # 4 mensagens do lead confirmadas como IA
+AI_SIGNAL_BLOCK_THRESHOLD = 3               # 3 mensagens do lead confirmadas como IA
 
 # TTL do timestamp "ultima msg da Mya": 24h (heurística de bot por tempo de resposta)
 LAST_AI_SENT_TTL_SECONDS = 60 * 60 * 24

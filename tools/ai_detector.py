@@ -120,3 +120,46 @@ def detect_weak_generic(text: str) -> tuple[bool, str]:
         if m:
             return True, f"frase generica curta: '{m.group(0)[:40]}'"
     return False, ""
+
+
+# Marcas de escrita casual humana — se presentes, NAO e um bot "polido demais".
+# Todos ancorados em \b para nao casar dentro de palavras comuns (ex.: "interesse",
+# "conversa") — falso positivo aqui derruba a deteccao.
+_CASUAL_MARKERS_RE = re.compile(
+    r"(\bvc\b|\bvcs\b|\btb\b|\btbm\b|\bpra\b|\bpq\b|\bpqp\b|\bblz\b|\bvlw\b|\bobg\b|\bné\b|\bne\b|\baki\b|\bto\b|"
+    r"\bk{2,}\b|\bkk+|\brs+\b|\bha(?:ha)+\b|\bhue+\b|\.{3,}|!{2,}|\?{2,})",
+    re.IGNORECASE,
+)
+_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF❤✨]"
+)
+
+
+def detect_polished_human(text: str) -> tuple[bool, str]:
+    """
+    Caso 1 (chatbot de IA imitando humano): texto que LE como pessoa, mas e
+    'polido demais' — inicial maiuscula + virgula + pontuacao final, e SEM
+    nenhuma marca casual (gírias, repeticao de letra, emoji, reticencias).
+
+    So denuncia quando COMBINADO com resposta rapida (<60s) no worker. Sozinho
+    nao basta — varios humanos escrevem certinho. Por isso o worker exige
+    AI_SIGNAL_BLOCK_THRESHOLD mensagens assim antes de bloquear.
+    """
+    if not text:
+        return False, ""
+    t = text.strip()
+    # Muito curta nao da sinal confiavel ("Ok.", "Sim, claro.")
+    if len(t) < 15:
+        return False, ""
+    # Marca casual ou emoji => humano, nao bot polido
+    if _CASUAL_MARKERS_RE.search(t) or _EMOJI_RE.search(t):
+        return False, ""
+    # Inicial maiuscula
+    first = t[0]
+    if not (first.isalpha() and first.isupper()):
+        return False, ""
+    has_comma = "," in t
+    has_end_punct = bool(re.search(r"[.!?]", t))
+    if has_comma and has_end_punct:
+        return True, "texto polido (maiuscula + virgula + pontuacao) sem marcas casuais"
+    return False, ""

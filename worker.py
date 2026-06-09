@@ -298,42 +298,44 @@ def process_message(msg_payload):
         _save_session_log(phone_number, instance_id)
         return
 
-    # Detecção heurística pré-LLM: padrões óbvios de IA/atendente virtual no input do "lead"
-    # Política: NUNCA bloqueia na 1ª mensagem. Só bloqueia (24h) após acumular
-    # AI_SIGNAL_BLOCK_THRESHOLD sinais E o lead já ter enviado >= AI_SIGNAL_BLOCK_THRESHOLD msgs.
+    # Detecção heurística pré-LLM — CASO 1: chatbot de IA imitando humano.
+    # Critério: texto "polido demais" (inicial maiúscula + vírgula + pontuação, sem
+    # marcas casuais) E resposta em menos de 60s. Acumula sinais e só bloqueia após
+    # AI_SIGNAL_BLOCK_THRESHOLD mensagens assim.
+    # Auto-respostas comuns (menu, ausência, saudação genérica) NÃO bloqueiam aqui —
+    # fluem para o LLM responder com o eco condicional (CASO 2).
+    # ai_signal_streak: True quando ESTA mensagem é polido+rápido. Impede que o
+    # clear_ai_signals pós-LLM zere o contador na mesma mensagem (a streak das 3
+    # mensagens só reseta quando vier uma mensagem NÃO suspeita).
+    ai_signal_streak = False
     try:
-        from tools.ai_detector import detect as detect_ai, detect_weak_generic
+        from tools.ai_detector import detect_polished_human
         from tools.manage_leads import (
             seconds_since_last_ai_msg, register_ai_signal,
             AI_SIGNAL_BLOCK_THRESHOLD, block_lead_as_ai,
         )
 
-        is_ai, motivo_ai = detect_ai(text_message)
+        is_polished, motivo_pol = detect_polished_human(text_message)
+        elapsed = seconds_since_last_ai_msg(phone_number, instance_id)
+        fast = elapsed is not None and elapsed < 60.0
 
-        if not is_ai:
-            is_weak, motivo_weak = detect_weak_generic(text_message)
-            if is_weak:
-                elapsed = seconds_since_last_ai_msg(phone_number, instance_id)
-                if elapsed is not None and elapsed < 40.0:
-                    is_ai = True
-                    motivo_ai = f"{motivo_weak} + resposta em {elapsed:.1f}s (pós-debounce)"
-
-        if is_ai:
-            save_message(phone_number, "human", text_message, instance_id)
-            save_message(phone_number, "ai", f"[sinal de IA (heurística): {motivo_ai}]", instance_id)
-
+        if is_polished and fast:
+            ai_signal_streak = True
+            motivo_ai = f"{motivo_pol} + resposta em {elapsed:.1f}s"
             signals = register_ai_signal(phone_number, f"heurística: {motivo_ai}", instance_id)
-            # Conta mensagens humanas (incluindo a recém-salva)
-            human_msgs = sum(1 for m in get_history(phone_number, instance_id) if m.get("type") == "human")
-            log(f"[AI_DETECT] Heurística sinalizou IA em {phone_number} [inst {instance_id}]: {motivo_ai} | signals={signals} human_msgs={human_msgs}")
+            # +1 conta a mensagem atual (ainda não salva no histórico)
+            human_msgs = sum(1 for m in get_history(phone_number, instance_id) if m.get("type") == "human") + 1
+            log(f"[AI_DETECT] Sinal IA (polido+rápido) em {phone_number} [inst {instance_id}]: {motivo_ai} | signals={signals} human_msgs={human_msgs}")
 
             if signals >= AI_SIGNAL_BLOCK_THRESHOLD and human_msgs >= AI_SIGNAL_BLOCK_THRESHOLD:
-                log(f"[AI_DETECT] Threshold atingido ({signals} sinais / {human_msgs} msgs) — bloqueando {phone_number} por 24h")
+                save_message(phone_number, "human", text_message, instance_id)
+                save_message(phone_number, "ai", f"[bloqueado: IA detectada — {motivo_ai}]", instance_id)
+                log(f"[AI_DETECT] Threshold atingido ({signals} sinais / {human_msgs} msgs) — bloqueando {phone_number}")
                 block_lead_as_ai(phone_number, f"heurística: {motivo_ai} (signals={signals})", instance_id)
-            else:
-                log(f"[AI_DETECT] Sinal registrado mas abaixo do threshold ({AI_SIGNAL_BLOCK_THRESHOLD}) — não bloqueando ainda")
-            _save_session_log(phone_number, instance_id)
-            return
+                _save_session_log(phone_number, instance_id)
+                return
+            # Abaixo do threshold: NÃO silencia — segue para o LLM responder com eco.
+            log(f"[AI_DETECT] Sinal registrado abaixo do threshold ({AI_SIGNAL_BLOCK_THRESHOLD}) — respondendo normalmente")
     except Exception as e:
         log(f"[AI_DETECT] Erro na heurística (seguindo fluxo normal): {e}")
 
@@ -527,7 +529,9 @@ def process_message(msg_payload):
     reset_followup_timer(phone_number, instance_id)
     try:
         from tools.manage_leads import clear_ai_signals, get_ai_signal_count
-        if get_ai_signal_count(phone_number, instance_id) > 0:
+        # Só zera a streak se ESTA mensagem NÃO foi polido+rápido. Se foi, mantém o
+        # contador para que 3 mensagens suspeitas seguidas atinjam o threshold.
+        if not ai_signal_streak and get_ai_signal_count(phone_number, instance_id) > 0:
             clear_ai_signals(phone_number, instance_id)
             log(f"[AI_DETECT] Sinais de IA zerados para {phone_number} (resposta humana confirmada)")
     except Exception as e:
