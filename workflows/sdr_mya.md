@@ -264,7 +264,7 @@ Uma tentativa de reabertura, depois saída elegante. Nunca duas pressões seguid
 ## FASE 2C — Secretária disposta a repassar
 
 **Balão 1 (empatia genuína — ela é quem mais sofre com o problema):**
-- "Combinado, obrigada! E imagino que boa parte dessas mensagens cai no seu colo, né? 😅"
+- "Oi{, Nome}! E imagino que boa parte dessas mensagens cai no seu colo, né? 😅"
 - "Show! Aliás, aposto que é você que responde a enxurrada de 'quanto custa' todo dia, né?"
 
 **Balão 2 (pedido do contato direto):**
@@ -310,7 +310,7 @@ Encerra sem pressionar. O `<SEM_INTERESSE/>` cancela os follow-ups; registre no 
 ## FASE 3 — Pergunta de preço (escada de 3 degraus)
 
 **1ª vez que pergunta:**
-- "Te adianto que é bem mais barato que um funcionário extra — e dá pra ver a diferença já no primeiro mês. Mas o melhor: tem 30 dias grátis, então você vê funcionando antes de pagar qualquer coisa. Quer que eu te mostre numa conversa de 15 min?"
+- "Pode fica {tranquila|tranquilo — conforme o gênero do lead}, nosso plano mais em conta é R$ 280, mais barato que um funcionário extra 😅 E você vai ver o aumento nas vendas logo no primeiro mês. Mas o melhor: tem 30 dias grátis, então você vê funcionando antes de pagar qualquer coisa. Posso te mostrar numa conversa rápida de 15 minutos"
 
 **Se insistir:**
 - "Claro! Os planos partem de menos de R$ 300 por mês, sem fidelidade. Como o investimento é baixo, vale mais a pena você ver a IA rodando no SEU cenário antes de decidir — em 15 min eu te mostro. Topa?"
